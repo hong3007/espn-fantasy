@@ -104,6 +104,13 @@ if node:
     for js_moves, py_moves in zip(got, (a.moves, b.moves)):
         assert [m[:2] for m in js_moves] == [[f.name, d.name] for f, d, *_ in py_moves], (js_moves, py_moves)
         assert all(abs(m[2] - g) < 1e-9 and abs(m[3] - c) < 1e-6 for m, (_, _, g, c) in zip(js_moves, py_moves))
+    # 실제 페이지처럼 처음 재편안(init)을 넣으면 계산 없이 그 값이 그대로 나와야 함(id → 선수 연결)
+    d0 = report.plan_data(a)
+    d0["init"] = {"moves": [[str(f.playerId), str(d.playerId), g, c] for f, d, g, c in a.moves], "base": 1.0, "after": 2.0}
+    js = ("const D=" + json.dumps(d0) + ";" + report.PLAN_JS +
+          "const P = plan(new Set()); console.log(JSON.stringify([P.moves.map(m => [m.fa.n, m.d.n]), P.base, P.after]))")
+    names, base0, after0 = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+    assert names == [[f.name, d.name] for f, d, *_ in a.moves] and (base0, after0) == (1.0, 2.0), names
 else:
     print("node가 없어 브라우저 재편안 비교는 건너뜀")
 

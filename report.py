@@ -269,17 +269,43 @@ const cdf = z => { const t = 1 / (1 + .3275911 * Math.abs(z) / Math.SQRT2),
   y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - .284496736) * t + .254829592) * t * Math.exp(-z * z / 2);
   return z >= 0 ? (1 + y) / 2 : (1 - y) / 2; };
 const above = (m, s) => s > 0 ? cdf(m / s) : +(m > 0);
-function lineup(c, S) {
-  const memo = new Map();
+// 하루 뛰는 선수가 31명 미만이라는 가정(비트 연산). 실제로는 로스터 12~13명 + FA 1명
+function lineup(c, S) {  // 점수와 배치(선발 횟수가 필요할 때만: 확실도 계산용)
+  const m = S.length + 1, memo = new Map();
   const f = (i, u) => {
     if (i === S.length) return [0, []];
-    const k = i + "," + u;
+    const k = u * m + i;
     if (memo.has(k)) return memo.get(k);
     const [s, r] = f(i + 1, u); let b = [s, [-1, ...r]];
     c.forEach(([v, e], j) => { if (!(u >> j & 1) && e.includes(S[i])) { const [s2, r2] = f(i + 1, u | 1 << j); if (s2 + v > b[0]) b = [s2 + v, [j, ...r2]]; } });
     memo.set(k, b); return b;
   };
   return f(0, 0);
+}
+function score(c, S) {  // 점수만(배치 배열을 안 만들어 빠름). 값은 lineup()과 같은 순서로 더해 똑같다
+  const m = S.length + 1, memo = new Map();
+  const f = (i, u) => {
+    if (i === S.length) return 0;
+    const k = u * m + i;
+    let b = memo.get(k);
+    if (b !== undefined) return b;
+    b = f(i + 1, u);
+    for (let j = 0; j < c.length; j++)
+      if (!(u >> j & 1) && c[j][1].includes(S[i])) { const s = f(i + 1, u | 1 << j) + c[j][0]; if (s > b) b = s; }
+    memo.set(k, b); return b;
+  };
+  return f(0, 0);
+}
+const cache = new Map();  // 같은 날 같은 선수 조합의 점수는 한 번만 계산(폰에서 × 다시 계산을 빠르게)
+function total(R) {
+  let t = 0;
+  for (let d = 0; d < D.days; d++) {
+    const p = R.filter(x => x.val[d] > 0), k = d + "|" + p.map(x => x.id).sort().join();
+    let s = cache.get(k);
+    if (s === undefined) { s = score(p.map(x => [x.val[d], x.elig]), D.slots); cache.set(k, s); }
+    t += s;
+  }
+  return t;
 }
 function sim(R) {
   let total = 0; const st = {};
@@ -294,30 +320,35 @@ function spread(b, a, P) {
   for (const p of P) { const d = (a.st[p.id] || 0) - (b.st[p.id] || 0); v += Math.abs(d) * p.sd ** 2 + (d * p.se) ** 2; }
   return Math.sqrt(v);
 }
-function rank(A, R, F) {
-  const base = sim(A), out = [];
+function rank(A, R, F) {  // FA마다 가장 좋은 방출 상대와 순증가, 순증가 큰 순(확실도는 plan에서 고른 교체만)
+  const bt = total(A), out = [];
   for (const fa of F.slice(0, 30)) {
     let best = null;
     for (const d of A.filter(p => p.ros < fa.ros).sort((x, y) => x.ros - y.ros).slice(0, 4)) {
       const L = D.limits[fa.pos];
       if (L !== undefined && R.filter(p => p !== d && p.pos === fa.pos).length >= L) continue;
-      const s = sim(A.filter(p => p !== d).concat([fa]));
-      if (!best || s.total - base.total > best.g) best = { fa, d, g: s.total - base.total, s };
+      const g = total(A.filter(p => p !== d).concat([fa])) - bt;
+      if (!best || g > best.g) best = { fa, d, g };
     }
-    if (best && best.g > 0) out.push({ fa, d: best.d, g: best.g, c: above(best.g, spread(base, best.s, A.concat([fa]))) });
+    if (best && best.g > 0) out.push(best);
   }
   return out.sort((x, y) => y.g - x.g);
 }
+const byId = Object.fromEntries(D.my.concat(D.fa).map(p => [p.id, p]));
 function plan(ex) {
+  if (!ex.size && D.init)  // 처음 화면은 리포트를 만들 때(파이썬) 계산해 둔 재편안 → 폰에서 열자마자 보인다
+    return { moves: D.init.moves.map(([f, d, g, c]) => ({ fa: byId[f], d: byId[d], g, c })), base: D.init.base, after: D.init.after };
   let A = D.my.slice(), R = D.roster.slice(), F = D.fa.filter(f => !ex.has(f.id));
   const moves = [];
   for (let i = 0; i < D.n; i++) {
     const r = rank(A, R, F);
     if (!r.length) break;
-    const m = r[0]; moves.push(m);
-    A = A.filter(p => p !== m.d).concat([m.fa]); R = R.filter(p => p !== m.d).concat([m.fa]); F = F.filter(p => p !== m.fa);
+    const m = r[0], after = A.filter(p => p !== m.d).concat([m.fa]);
+    m.c = above(m.g, spread(sim(A), sim(after), A.concat([m.fa])));  // 선발 횟수 변화로 확실도(고른 교체만)
+    moves.push(m);
+    A = after; R = R.filter(p => p !== m.d).concat([m.fa]); F = F.filter(p => p !== m.fa);
   }
-  return { moves, base: sim(D.my).total, after: sim(A).total };
+  return { moves, base: total(D.my), after: total(A) };
 }
 if (typeof document !== "undefined") {
   const ex = new Set(), $ = s => document.querySelector(s);
@@ -334,7 +365,13 @@ if (typeof document !== "undefined") {
         `<span class=arrow>→</span>${card("영입", m.fa, "in")}</div><span class=gain>+${m.g.toFixed(0)}` +
         `<small>확실 ${Math.round(m.c * 100)}%${m.c < .7 ? " (근소)" : ""}</small></span></li>`).join("") + "</ol>";
   };
-  $("#pills").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { ex.add(b.dataset.id); draw(); $("#pills button")?.focus(); } });
+  $("#pills").addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    ex.add(b.dataset.id); b.closest("li").remove();  // 누르자마자 반응을 보여 주고 계산은 그다음
+    $("#plan").innerHTML = "<p class=lead>다시 계산하는 중…</p>";
+    setTimeout(() => { draw(); $("#pills button")?.focus(); }, 30);
+  });
   draw();
 }
 if (typeof module !== "undefined") module.exports = { plan };
@@ -465,7 +502,9 @@ def render(league_name, standings, me, box, opp, a, acq_limit=None):
     data = plan_data(a, info=lambda p: f"{poss(p)} {e(p.proTeam)} {status(p)}")
     data["when"] = (["이번 주", "다음 주", "그다음 주"] + [f"{n}주 뒤" for n in range(3, 10)]) if weekly else [f"{i}순위" for i in range(1, 11)]
     data["now"] = "이번 주" if weekly else "지금"
-    script = "const D=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";" + PLAN_JS  # <!--·</script 조합이 스크립트를 끊지 않게
+    data["init"] = {"moves": [[str(f.playerId), str(d.playerId), g, c] for f, d, g, c in a.moves],  # 첫 화면은 계산 없이
+                    "base": a.base.total, "after": a.new.total}
+    script ="const D=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";" + PLAN_JS  # <!--·</script 조합이 스크립트를 끊지 않게
     note = (f"영입 한도가 매치업당 {acq_limit:g}명이라 한 주에 하나씩 진행해요. " if acq_limit and acq_limit > 0 else "")
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
