@@ -6,6 +6,7 @@ on:
     - cron: "0 22 * * *"
   workflow_dispatch:
 permissions:
+  actions: write  # 아래 '자동 실행 켜기' 단계용
   contents: read
   pages: write
   id-token: write
@@ -23,8 +24,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install espn_api==1.0.1 python-dotenv==1.2.4  # 클라우드는 쿠키를 비밀값으로 받아 Playwright가 필요 없다
+      - run: pip install -r requirements.txt  # 쿠키를 넘겨받는 라이브러리라 PC와 같은 고정 버전(브라우저는 받지 않음)
       - run: python check.py
+      - run: gh api -X PUT repos/${{ github.repository }}/actions/workflows/report.yml/enable  # 공개 저장소는 60일간 커밋이 없으면 꺼짐 → 매번 켜 둠
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: python report.py
         env:
           ESPN_S2: ${{ secrets.ESPN_S2 }}

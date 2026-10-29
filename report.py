@@ -621,26 +621,38 @@ def free_agents_raw(league, size=150):
                                           headers={"x-fantasy-filter": json.dumps(filters)})["players"]
 
 
-def main():
+def connect(use_env=True):
+    """ESPN 리그 접속 → (league, espn_s2, swid). 쿠키는 환경변수(.env·GitHub Secrets) → 크롬 프로필 순으로 쓰고,
+    만료됐으면 로그인 창을 띄운다. GitHub Actions(CI)에는 창이 없어 안내 후 종료. sync_cookies.py도 이걸 쓴다."""
     from dotenv import load_dotenv
-    from espn_api.basketball import League, Player
-    from espn_api.basketball.constant import POSITION_MAP
+    from espn_api.basketball import League
     from espn_api.requests.espn_requests import ESPNAccessDenied
     load_dotenv(HERE / ".env")  # 없어도 됨. ESPN_S2/SWID를 넣으면 크롬 로그인 대신 그 값을 쓴다
-    now = datetime.now(timezone.utc) - timedelta(hours=5)  # ponytail: 미국 동부 표준시 고정(서머타임엔 1시간 오차)
+    now = datetime.now(timezone.utc) - timedelta(hours=5)
     league_id = int(os.getenv("LEAGUE_ID", "1407913927"))  # Yushin 2026 League. 같은 리그 친구는 그대로 쓰면 자기 팀이 나온다
     year = int(os.getenv("YEAR", now.year + (now.month >= 9)))  # ESPN 시즌 연도 = 시즌이 끝나는 해
-    s2, swid = os.getenv("ESPN_S2"), os.getenv("SWID")
+    expired = ("ESPN 쿠키가 없거나 만료됐습니다. PC에서 python sync_cookies.py 를 실행하세요"
+               "(만료됐으면 크롬 로그인 창이 뜹니다). GitHub Secrets의 ESPN_S2·SWID가 자동으로 바뀝니다.")
+    s2, swid = (os.getenv("ESPN_S2"), os.getenv("SWID")) if use_env else (None, None)
     if not (s2 and swid):
+        if os.getenv("CI"):
+            raise SystemExit(expired)
         s2, swid = login_cookies(league_id)
     try:
-        league = League(league_id=league_id, year=year, espn_s2=s2, swid=swid)
+        return League(league_id=league_id, year=year, espn_s2=s2, swid=swid), s2, swid
     except ESPNAccessDenied:  # 로그인 만료 → 창을 띄워 다시 로그인
-        if os.getenv("CI"):  # GitHub Actions에는 창이 없다
-            raise SystemExit("ESPN 쿠키가 만료됐습니다. PC에서 리포트를 한 번 실행해 다시 로그인한 뒤, "
-                             "GitHub 저장소 Settings → Secrets의 ESPN_S2·SWID를 새 값으로 바꾸세요.")
+        if os.getenv("CI"):
+            raise SystemExit(expired)
         s2, swid = login_cookies(league_id, force=True)
-        league = League(league_id=league_id, year=year, espn_s2=s2, swid=swid)
+        return League(league_id=league_id, year=year, espn_s2=s2, swid=swid), s2, swid
+
+
+def main():
+    from espn_api.basketball import Player
+    from espn_api.basketball.constant import POSITION_MAP
+    now = datetime.now(timezone.utc) - timedelta(hours=5)  # ponytail: 미국 동부 표준시 고정(서머타임엔 1시간 오차)
+    league, s2, swid = connect()
+    year = league.year
     if "POINTS" not in (league.settings.scoring_type or ""):
         raise SystemExit("포인트 방식 리그만 지원합니다(카테고리·로토 리그는 점수 계산 방식이 다름).")
 
@@ -679,7 +691,8 @@ def main():
     out.write_text(render(league.settings.name, league.standings(), me, box, opp, a,
                           st["acquisitionSettings"].get("matchupAcquisitionLimit")), encoding="utf-8")
     print(f"저장: {out}")
-    webbrowser.open(out.as_uri())
+    if not os.getenv("CI"):
+        webbrowser.open(out.as_uri())
 
 
 if __name__ == "__main__":
