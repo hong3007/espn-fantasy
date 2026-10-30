@@ -4,7 +4,7 @@
 name: 리포트 만들기
 on:
   schedule:
-    - cron: "*/15 * * * *"  # 진단용(임시): 예약 실행이 잡히는지 확인 후 되돌림
+    - cron: "17 1,4,7,10,13,16,19,22 * * *"
   workflow_dispatch:
   issues:  # 리포트의 '지금 새로 만들기' → 저장소 주인이 '새 리포트 만들기' 이슈를 열면 실행(폰·PC, 로그인은 GitHub가 확인)
     types: [opened]
