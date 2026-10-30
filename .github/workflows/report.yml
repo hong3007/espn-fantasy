@@ -4,7 +4,7 @@
 name: 리포트 만들기
 on:
   schedule:
-    - cron: "17 1,4,7,10,13,16,19,22 * * *"
+    - cron: "*/15 * * * *"  # 진단용(임시): 예약 실행이 잡히는지 확인 후 되돌림
   workflow_dispatch:
 permissions:
   actions: write  # 아래 '자동 실행 켜기' 단계용
