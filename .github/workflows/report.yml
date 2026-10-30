@@ -24,11 +24,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt  # 쿠키를 넘겨받는 라이브러리라 PC와 같은 고정 버전(브라우저는 받지 않음)
-      - run: python check.py
-      - run: gh api -X PUT repos/${{ github.repository }}/actions/workflows/report.yml/enable  # 공개 저장소는 60일간 커밋이 없으면 꺼짐 → 매번 켜 둠
+      - run: gh api -X PUT repos/${{ github.repository }}/actions/workflows/report.yml/enable  # 공개 저장소는 60일간 커밋이 없으면 꺼짐 → 매번 켜 둠(check 실패와 상관없이 먼저)
         env:
           GH_TOKEN: ${{ github.token }}
+      - run: pip install -r requirements-ci.txt  # PC 전용(Playwright·PyNaCl)을 뺀 고정 버전. 쿠키를 넘겨받는 라이브러리라 버전 고정
+      - run: python check.py
       - run: python report.py
         env:
           ESPN_S2: ${{ secrets.ESPN_S2 }}

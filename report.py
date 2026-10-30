@@ -271,6 +271,7 @@ const cdf = z => { const t = 1 / (1 + .3275911 * Math.abs(z) / Math.SQRT2),
 const above = (m, s) => s > 0 ? cdf(m / s) : +(m > 0);
 // 하루 뛰는 선수가 31명 미만이라는 가정(비트 연산). 실제로는 로스터 12~13명 + FA 1명
 function lineup(c, S) {  // 점수와 배치(선발 횟수가 필요할 때만: 확실도 계산용)
+  if (c.length > 30) throw new Error("하루에 뛰는 선수가 31명 이상");
   const m = S.length + 1, memo = new Map();
   const f = (i, u) => {
     if (i === S.length) return [0, []];
@@ -283,6 +284,7 @@ function lineup(c, S) {  // 점수와 배치(선발 횟수가 필요할 때만: 
   return f(0, 0);
 }
 function score(c, S) {  // 점수만(배치 배열을 안 만들어 빠름). 값은 lineup()과 같은 순서로 더해 똑같다
+  if (c.length > 30) throw new Error("하루에 뛰는 선수가 31명 이상");
   const m = S.length + 1, memo = new Map();
   const f = (i, u) => {
     if (i === S.length) return 0;
@@ -365,12 +367,18 @@ if (typeof document !== "undefined") {
         `<span class=arrow>→</span>${card("영입", m.fa, "in")}</div><span class=gain>+${m.g.toFixed(0)}` +
         `<small>확실 ${Math.round(m.c * 100)}%${m.c < .7 ? " (근소)" : ""}</small></span></li>`).join("") + "</ol>";
   };
+  let busy = false;
   $("#pills").addEventListener("click", e => {
     const b = e.target.closest("button");
-    if (!b) return;
+    if (!b || busy) return;  // 계산 중 연속으로 누르면 무시(계산이 겹쳐 폰이 멈추지 않게)
+    busy = true;
     ex.add(b.dataset.id); b.closest("li").remove();  // 누르자마자 반응을 보여 주고 계산은 그다음
     $("#plan").innerHTML = "<p class=lead>다시 계산하는 중…</p>";
-    setTimeout(() => { draw(); $("#pills button")?.focus(); }, 30);
+    setTimeout(() => {
+      try { draw(); $("#pills button")?.focus(); }
+      catch (err) { $("#plan").innerHTML = "<p class=lead>계산 중 문제가 생겼어요. 새로고침하면 처음으로 돌아가요.</p>"; }
+      busy = false;
+    }, 30);
   });
   draw();
 }
@@ -504,7 +512,7 @@ def render(league_name, standings, me, box, opp, a, acq_limit=None):
     data["now"] = "이번 주" if weekly else "지금"
     data["init"] = {"moves": [[str(f.playerId), str(d.playerId), g, c] for f, d, g, c in a.moves],  # 첫 화면은 계산 없이
                     "base": a.base.total, "after": a.new.total}
-    script ="const D=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";" + PLAN_JS  # <!--·</script 조합이 스크립트를 끊지 않게
+    script = "const D=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";" + PLAN_JS  # <!--·</script 조합이 스크립트를 끊지 않게
     note = (f"영입 한도가 매치업당 {acq_limit:g}명이라 한 주에 하나씩 진행해요. " if acq_limit and acq_limit > 0 else "")
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
@@ -660,6 +668,10 @@ def free_agents_raw(league, size=150):
                                           headers={"x-fantasy-filter": json.dumps(filters)})["players"]
 
 
+def et_now():
+    return datetime.now(timezone.utc) - timedelta(hours=5)  # ponytail: 미국 동부 표준시 고정(서머타임엔 1시간 오차)
+
+
 def connect(use_env=True):
     """ESPN 리그 접속 → (league, espn_s2, swid). 쿠키는 환경변수(.env·GitHub Secrets) → 크롬 프로필 순으로 쓰고,
     만료됐으면 로그인 창을 띄운다. GitHub Actions(CI)에는 창이 없어 안내 후 종료. sync_cookies.py도 이걸 쓴다."""
@@ -667,7 +679,7 @@ def connect(use_env=True):
     from espn_api.basketball import League
     from espn_api.requests.espn_requests import ESPNAccessDenied
     load_dotenv(HERE / ".env")  # 없어도 됨. ESPN_S2/SWID를 넣으면 크롬 로그인 대신 그 값을 쓴다
-    now = datetime.now(timezone.utc) - timedelta(hours=5)
+    now = et_now()
     league_id = int(os.getenv("LEAGUE_ID", "1407913927"))  # Yushin 2026 League. 같은 리그 친구는 그대로 쓰면 자기 팀이 나온다
     year = int(os.getenv("YEAR", now.year + (now.month >= 9)))  # ESPN 시즌 연도 = 시즌이 끝나는 해
     expired = ("ESPN 쿠키가 없거나 만료됐습니다. PC에서 python sync_cookies.py 를 실행하세요"
@@ -689,7 +701,7 @@ def connect(use_env=True):
 def main():
     from espn_api.basketball import Player
     from espn_api.basketball.constant import POSITION_MAP
-    now = datetime.now(timezone.utc) - timedelta(hours=5)  # ponytail: 미국 동부 표준시 고정(서머타임엔 1시간 오차)
+    now = et_now()
     league, s2, swid = connect()
     year = league.year
     if "POINTS" not in (league.settings.scoring_type or ""):

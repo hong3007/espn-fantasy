@@ -111,6 +111,15 @@ if node:
           "const P = plan(new Set()); console.log(JSON.stringify([P.moves.map(m => [m.fa.n, m.d.n]), P.base, P.after]))")
     names, base0, after0 = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
     assert names == [[f.name, d.name] for f, d, *_ in a.moves] and (base0, after0) == (1.0, 2.0), names
+    # 첫 화면(미리 계산해 둔 값)과 × 후 다시 계산한 값이 같은 기준인지: JS 합계가 파이썬 합계와 같아야 함
+    js = ("const D=" + json.dumps(report.plan_data(a)) + ";" + report.PLAN_JS +
+          "const P = plan(new Set(['none'])); console.log(JSON.stringify([P.base, P.after]))")
+    jb, ja = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+    assert abs(jb - a.base.total) < 1e-9 and abs(ja - a.new.total) < 1e-9, (jb, ja, a.base.total, a.new.total)
+    # 하루 31명 이상이 뛰면 조용히 틀리지 말고 멈춘다
+    js = ("const D={my:[],ir:[],fa:[]};" + report.PLAN_JS +
+          "let ok = 0; for (const f of [score, lineup]) { try { f(Array(31).fill([1, ['PG']]), ['PG']) } catch (e) { ok++ } } console.log(ok)")
+    assert subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout.strip() == "2"
 else:
     print("node가 없어 브라우저 재편안 비교는 건너뜀")
 
@@ -128,6 +137,10 @@ assert "&lt;b&gt;내팀" in page and "<b>내팀" not in page and "<img src=x>" n
 assert "data:image/png;base64," in page and "apple-touch-icon" in page and "매치업당 1명" in page
 assert "BYE" in bye
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
+
+# CI 설치 목록은 requirements.txt의 부분집합(버전이 서로 어긋나면 안 됨)
+ci = set((report.HERE / "requirements-ci.txt").read_text(encoding="utf-8").split())
+assert ci <= set((report.HERE / "requirements.txt").read_text(encoding="utf-8").split()), "requirements-ci.txt가 requirements.txt와 다름"
 
 # 보안: 로그인 창에서 입력값·화면·통신을 엿볼 수 있는 Playwright 기능을 쓰면 실패
 src = open(report.__file__, encoding="utf-8").read()
