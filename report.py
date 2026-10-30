@@ -22,7 +22,7 @@ WINDOW = 21  # 영입 효과를 보는 기간(일). 매치업당 영입 한도�
 MOVES = 3    # 재편안 교체 수(매치업당 1명이면 3주치)
 MIN_GAIN = 5  # 이 점수(WINDOW일 선발 점수)보다 적게 오르는 교체는 영입 한도를 쓸 가치가 없어 추천하지 않는다
 CV_M = 10    # 선수 개인의 경기 변동계수를 리그 공통값 쪽으로 당기는 강도(경기 수)
-STATUS = {"OUT": "결장", "DAY_TO_DAY": "출전 불투명", "SUSPENSION": "징계"}
+STATUS = {"OUT": "OUT", "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP"}  # ESPN 판타지에서 쓰는 용어 그대로(사용자 요청)
 
 ICON_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
             "<circle cx='32' cy='32' r='30' fill='#f07a1a'/>"
@@ -243,7 +243,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     acts = []  # 재편안 말고 함께 챙길 것
     ir_free = ir_slots - sum(p.lineupSlot == "IR" for p in roster)
     for p in [p for p in active if p.injuryStatus == "OUT"][:max(0, ir_free)]:
-        acts.append(f"{p.name}: 결장 중이에요. IR로 옮기면 방출 없이 1명을 더 영입할 수 있어요.")
+        acts.append(f"{p.name}: OUT 상태예요. IR로 옮기면 방출 없이 1명을 더 영입할 수 있어요.")
     for p in roster:
         if p.lineupSlot == "IR" and p.injuryStatus not in ("OUT", "SUSPENSION"):
             acts.append(f"{p.name}: IR에서 복귀했어요. 로스터로 올려야 영입이 막히지 않아요(1명 방출 필요).")
@@ -636,7 +636,7 @@ def render(league_name, standings, me, box, opp, a):
 <h2>계산 방법</h2><ul class=method>
 <li>경기당 추정: 올 시즌 평균을 작년 평균과 ESPN 예상 쪽으로 보정해요. 올 시즌 {K}경기를 뛰면 반반이라, 시즌 초 몇 경기로 튀는 숫자를 줄여 줘요.</li>
 <li>출전율: ESPN 예상 출전 경기 ÷ 82(정규시즌 경기 수). ESPN 예상이 없으면 작년 출전 경기로 계산해요.</li>
-<li>선발 점수: 날마다 실제 NBA 일정에서 경기가 있는 선수를 선발 {len(a.slots)}자리에 가장 높게 배치한 합이에요. 결장 선수는 복귀 예정일까지 0점.</li>
+<li>선발 점수: 날마다 실제 NBA 일정에서 경기가 있는 선수를 선발 {len(a.slots)}자리에 가장 높게 배치한 합이에요. OUT 선수는 복귀 예정일까지 0점.</li>
 <li>순증가: 그 선수를 영입하고 방출 대상을 내보냈을 때 {a.days}일 선발 점수 차이. 방출 대상은 장기 가치(경기당 추정 × 출전율)가 더 낮은 선수만 골라요.</li>
 <li>확실도: 교체로 선발 경기가 늘고 주는 선수들의 경기별 점수 흔들림(작년·올해 경기 기록)과 경기당 추정의 오차(± 숫자)로, 순증가가 0보다 클 확률을 계산해요. 70% 미만이면 근소.</li>
 <li>승률: 현재 점수 + 남은 예상과, 남은 선발 경기의 흔들림으로 계산해요. 80% 범위는 예상 최종이 열 번 중 여덟 번 들어가는 구간이에요.</li>

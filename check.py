@@ -79,7 +79,7 @@ assert all(t[0] is not hurt for t in a.adds), "결장 FA는 추천하지 않음"
 # 포지션: PG는 W 방출로 3→2명, C는 C1 방출·C2·Hurt 영입으로 1→2명. 보강 효과는 그 포지션 최선 FA(C2 +130), PG는 없음
 assert [(r.x, len(r.before), len(r.after), r.best and r.best[0].name) for r in a.pos] == [("PG", 3, 2, None), ("C", 1, 2, "C2")]
 assert round(a.idle, 2) == round((2 * 6 - 7) / 6, 2), "선발 2자리×6일 중 7번만 채움(G1 6 + C1 1)"
-assert any(x.startswith("Out: 결장 중") for x in a.acts), a.acts
+assert any(x.startswith("Out: OUT 상태예요") for x in a.acts), a.acts
 
 # 상대가 있고 지는 중: 이번 매치업용 추천은 웨이버 제외, IR 복귀 안내
 ir = P("IRback", 25, ["PG"], sps, slot="IR")
