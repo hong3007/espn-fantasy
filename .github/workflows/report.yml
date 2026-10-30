@@ -34,6 +34,7 @@ jobs:
         env:
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           SWID: ${{ secrets.SWID }}
+          ACQ_LIMIT: ${{ vars.ACQ_LIMIT }}  # 비워 두면 ESPN 설정값(매치업당 영입 한도) 사용
           TZ: Asia/Seoul
       - run: mkdir site && cp report.html site/index.html
       - uses: actions/upload-pages-artifact@v3

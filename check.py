@@ -85,7 +85,8 @@ assert any(x.startswith("Out: 결장 중") for x in a.acts), a.acts
 ir = P("IRback", 25, ["PG"], sps, slot="IR")
 other.roster = [P("O1", 50, ["PG"], sps), P("O2", 50, ["C"], sps)]
 c2w, c3 = P("C2", 25, ["C"], sps, waiver=True), P("C3", 22, ["C"], sps)
-a2 = report.analyze(roster + [ir], other.roster, [c2w, c3], slots, {}, 1, 1, 3, 6, scores=(150, 0))
+a2 = report.analyze(roster + [ir], other.roster, [c2w, c3], slots, {}, 1, 1, 3, 6, scores=(150, 0),
+                    acq=NS(limit=1, used=0, next_start=date(2026, 11, 2)))
 t2 = "\n".join(a2.acts)
 assert (a2.me_w.total, a2.opp_w.total) == (110, 300)
 # 예상 최종 260 대 300 → 40점 차라 승률 낮음. C3↔W(바로 영입)는 1~3일 +2+22+22=46점이라 승률이 크게 오름
@@ -127,15 +128,28 @@ else:
 me_t.roster = roster + [ir]
 w.injuryStatus = "<img src=x>"
 box = NS(home_team=other, away_team=me_t, home_score=111.0, away_score=99.0)
-page = report.render("우리리그", [me_t, other], me_t, box, other, a2, 1)
+page = report.render("우리리그", [me_t, other], me_t, box, other, a2)
 assert "<p class=final>209</p>" in page and "<p class=final>411</p>" in page, "현재 점수 + 남은 예상"
 assert "방출 → C2" in page and "id=pills" in page and "내 승률" in page and "80% 범위" in page
 assert page.count("<script>") == page.count("</script>") == 1, "데이터 안의 </ 가 스크립트를 끊으면 안 됨"
-bye = report.render("우리리그", [me_t, other], me_t, None, None, a, -1)
+bye = report.render("우리리그", [me_t, other], me_t, None, None, a)
 assert '과다</span> → <span class="tag spare">적정' in bye and '부족</span> → <span class="tag spare">적정' in bye, "PG 3→2, C 1→2"
 assert "&lt;b&gt;내팀" in page and "<b>내팀" not in page and "<img src=x>" not in page, "ESPN 문자열은 이스케이프"
-assert "data:image/png;base64," in page and "apple-touch-icon" in page and "매치업당 1명" in page
+assert "data:image/png;base64," in page and "apple-touch-icon" in page and "이번 매치업 영입 0회 사용 / 한도 1회(남은 1회)" in page
 assert "BYE" in bye
+
+# 영입 한도: 남은 횟수에 맞춰 주별 배정, 다 썼으면 다음 매치업부터 계산
+mk = lambda limit, used: report.analyze(roster + [out], [], [c2, c4, bad], slots, {}, 1, 1, 3, 6,
+                                        acq=NS(limit=limit, used=used, next_start=date(2026, 11, 2)))
+assert mk(1, 0).week_of == [0, 1, 2] and mk(1, 0).sps.start == 1
+x = mk(1, 1)
+assert x.left == 0 and x.week_of == [1, 2, 3] and x.sps.start == 4, (x.left, x.week_of, x.sps)
+assert mk(2, 1).week_of == [0, 1, 1] and mk(-1, 0).week_of == [0, 0, 0]
+assert mk(1, 7).left == 0, "한도보다 많이 썼어도 남은 횟수는 0"
+px = report.render("우리리그", [me_t, other], me_t, None, None, x)
+assert "한도 1회(남은 0회)" in px and "다음 매치업부터 계산" in px, "다 썼으면 안내"
+assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매치업(11/2)부터 " in px, "주별 날짜 표기"
+assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
 
 # CI 설치 목록은 requirements.txt의 부분집합(버전이 서로 어긋나면 안 됨)

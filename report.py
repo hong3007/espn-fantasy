@@ -20,6 +20,7 @@ HERE = Path(__file__).parent
 K = 10       # 올 시즌 이 경기 수만큼 뛰면 올 시즌 평균과 사전 추정(지난 시즌·ESPN 예상)을 반반 믿는다
 WINDOW = 21  # 영입 효과를 보는 기간(일). 매치업당 영입 한도가 작아 한 번 데려오면 몇 주는 쓴다고 본다
 MOVES = 3    # 재편안 교체 수(매치업당 1명이면 3주치)
+MIN_GAIN = 5  # 이 점수(WINDOW일 선발 점수)보다 적게 오르는 교체는 영입 한도를 쓸 가치가 없어 추천하지 않는다
 CV_M = 10    # 선수 개인의 경기 변동계수를 리그 공통값 쪽으로 당기는 강도(경기 수)
 STATUS = {"OUT": "결장", "DAY_TO_DAY": "출전 불투명", "SUSPENSION": "징계"}
 
@@ -187,7 +188,7 @@ def rank_adds(active, roster, fas, sps, slots, today_sp, limits):
             sim = simulate([p for p in active if p is not d] + [fa], sps, slots, today_sp)
             if best is None or sim.total - base.total > best[2]:
                 best = (fa, d, sim.total - base.total, sim)
-        if best and best[2] > 0:
+        if best and best[2] > MIN_GAIN:
             picks.append(best[:3] + (prob_above(best[2], spread(base, best[3], active + [fa])),))
     return sorted(picks, key=lambda x: x[2], reverse=True)
 
@@ -209,11 +210,19 @@ def plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, n=MOVES)
     return moves, active
 
 
-def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end, final_sp, scores=(0, 0)):
-    """scores = 이번 매치업 현재 점수 (나, 상대)"""
+def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end, final_sp, scores=(0, 0), acq=None):
+    """scores = 이번 매치업 현재 점수 (나, 상대).
+    acq = 영입 한도 NS(limit 매치업당 한도(-1이면 무제한), used 이번 매치업에 쓴 횟수, next_start 다음 매치업 시작 날짜)"""
+    acq = acq or NS(limit=-1, used=0, next_start=None)
+    left = max(0, acq.limit - acq.used) if acq.limit > 0 else None  # 이번 매치업에 남은 영입 횟수(None=무제한)
+    start = today_sp if left != 0 else week_end + 1  # 이번 매치업 영입을 다 썼으면 재편안은 다음 매치업부터 계산
+    if start > final_sp:
+        start = today_sp
+    # 몇 번째 교체를 몇 주 뒤에 하는지: 이번 매치업 남은 횟수만큼은 이번 주, 이후는 매치업마다 한도만큼
+    week_of = [0 if left is None or i < left else 1 + (i - left) // acq.limit for i in range(MOVES)]
     fas = [f for f in fas if f.injuryStatus not in ("OUT", "SUSPENSION")]  # 영입 한도가 귀해서 지금 못 뛰는 FA는 추천하지 않는다
     active = [p for p in roster if p.lineupSlot != "IR"]
-    sps = range(today_sp, min(today_sp + WINDOW, final_sp + 1))
+    sps = range(start, min(start + WINDOW, final_sp + 1))
     week = range(today_sp, min(week_end, final_sp) + 1)
     base = simulate(active, sps, slots, today_sp)
     adds = rank_adds(active, roster, fas, sps, slots, today_sp, limits)
@@ -238,7 +247,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     for p in roster:
         if p.lineupSlot == "IR" and p.injuryStatus not in ("OUT", "SUSPENSION"):
             acts.append(f"{p.name}: IR에서 복귀했어요. 로스터로 올려야 영입이 막히지 않아요(1명 방출 필요).")
-    if win is not None and win < .5:
+    if win is not None and win < .5 and left != 0:  # 이번 매치업에 영입이 남아 있을 때만
         wk = rank_adds(active, roster, [f for f in fas if not f.waiver], week, slots, today_sp, limits)[:1]
         if wk and (not moves or wk[0][0] is not moves[0][0]):
             new = prob_above(diff + wk[0][2], sd)
@@ -249,7 +258,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
               win=win, me_sd=spread(ZERO, me_w, active), opp_sd=spread(ZERO, opp_w, opp_active) if opp_w else 0,
-              active=active)
+              active=active, acq=acq, left=left, week_of=week_of)
 
 
 def plan_data(a, info=lambda p: ""):
@@ -257,7 +266,7 @@ def plan_data(a, info=lambda p: ""):
     pack = lambda p: {"id": str(p.playerId), "n": html.escape(p.name), "pos": p.position, "info": info(p),
                       "elig": [s for s in dict.fromkeys(p.eligibleSlots) if s in a.slots], "ros": ros(p), "sd": p.sd, "se": p.se,
                       "val": [game_value(p, sp, a.today_sp) for sp in a.sps]}
-    return {"slots": list(a.slots), "days": len(a.sps), "n": MOVES, "limits": a.limits, "my": [pack(p) for p in a.active],
+    return {"slots": list(a.slots), "days": len(a.sps), "n": MOVES, "min": MIN_GAIN, "limits": a.limits, "my": [pack(p) for p in a.active],
             "ir": [{"id": str(p.playerId), "pos": p.position} for p in a.roster if p.lineupSlot == "IR"],
             "fa": [pack(p) for p in a.cands]}
 
@@ -332,7 +341,7 @@ function rank(A, R, F) {  // FA마다 가장 좋은 방출 상대와 순증가, 
       const g = total(A.filter(p => p !== d).concat([fa])) - bt;
       if (!best || g > best.g) best = { fa, d, g };
     }
-    if (best && best.g > 0) out.push(best);
+    if (best && best.g > D.min) out.push(best);
   }
   return out.sort((x, y) => y.g - x.g);
 }
@@ -362,7 +371,7 @@ if (typeof document !== "undefined") {
     $("#excluded").innerHTML = ex.size ? "뺀 선수: " + D.fa.filter(f => ex.has(f.id)).map(f => f.n).join(", ") : "";
     $("#plan").innerHTML = !M.length ? (ex.size ? "<p class=lead>뺀 선수 말고는 남은 후보가 없어요. 새로고침하면 처음으로 돌아가요.</p>" : "<p class=lead>지금 로스터보다 나은 FA가 없어요. 이대로 유지하세요.</p>") :
       `<p class=now>${D.now} 할 일: <b>${M[0].d.n}</b> 방출하고 <b class=hl>${M[0].fa.n}</b> 영입</p>` +
-      `<p class=lead>아래 순서대로 바꾸면 앞으로 ${D.days}일 선발 점수가 <b>${P.base.toFixed(0)}</b>점에서 <b>${P.after.toFixed(0)}</b>점으로 늘어요.</p>` +
+      `<p class=lead>아래 순서대로 바꾸면 ${D.from}앞으로 ${D.days}일 선발 점수가 <b>${P.base.toFixed(0)}</b>점에서 <b>${P.after.toFixed(0)}</b>점으로 늘어요.</p>` +
       "<ol class=moves>" + M.map((m, i) => `<li><span class=when>${D.when[i]}</span><div class=pair>${card("방출", m.d, "out")}` +
         `<span class=arrow>→</span>${card("영입", m.fa, "in")}</div><span class=gain>+${m.g.toFixed(0)}` +
         `<small>확실 ${Math.round(m.c * 100)}%${m.c < .7 ? " (근소)" : ""}</small></span></li>`).join("") + "</ol>";
@@ -487,7 +496,7 @@ border:1px solid var(--line);border-radius:8px;padding:18px 16px;text-align:cent
 """
 
 
-def render(league_name, standings, me, box, opp, a, acq_limit=None):
+def render(league_name, standings, me, box, opp, a):
     e = lambda s: html.escape(str(s))
     poss = lambda p: " ".join(x for x in BASE if x in p.eligibleSlots)
     tag = lambda text, kind="": f'<span class="tag {kind}">{e(text)}</span>'
@@ -506,14 +515,26 @@ def render(league_name, standings, me, box, opp, a, acq_limit=None):
         return f"<div class=who><b>{e(p.name)}</b><small>{poss(p)} {e(p.proTeam)}</small>{info}</div>"
 
     # 재편안: 브라우저에서 PLAN_JS가 그린다(알약 × → 그 선수를 빼고 다시 계산)
-    weekly = acq_limit == 1
     data = plan_data(a, info=lambda p: f"{poss(p)} {e(p.proTeam)} {status(p)}")
-    data["when"] = (["이번 주", "다음 주", "그다음 주"] + [f"{n}주 뒤" for n in range(3, 10)]) if weekly else [f"{i}순위" for i in range(1, 11)]
-    data["now"] = "이번 주" if weekly else "지금"
+    names = ["이번 주", "다음 주", "그다음 주"] + [f"{n}주 뒤" for n in range(3, 12)]
+
+    def label(w):  # w주 뒤 매치업(월요일 시작)
+        d = a.acq.next_start + timedelta(days=7 * (w - 1)) if w and a.acq.next_start else None
+        return names[w] + (f" {d.month}/{d.day}~" if d else "")
+    data["when"] = [label(w) for w in a.week_of] if a.acq.limit > 0 else [f"{i}순위" for i in range(1, 11)]
+    data["now"] = data["when"][0] if a.acq.limit > 0 else "지금"
+    n0 = a.acq.next_start
+    data["from"] = f"다음 매치업({n0.month}/{n0.day})부터 " if a.left == 0 and n0 else ""
     data["init"] = {"moves": [[str(f.playerId), str(d.playerId), g, c] for f, d, g, c in a.moves],  # 첫 화면은 계산 없이
                     "base": a.base.total, "after": a.new.total}
     script = "const D=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";" + PLAN_JS  # <!--·</script 조합이 스크립트를 끊지 않게
-    note = (f"영입 한도가 매치업당 {acq_limit:g}명이라 한 주에 하나씩 진행해요. " if acq_limit and acq_limit > 0 else "")
+    note = ""
+    if a.acq.limit > 0:
+        note = f"이번 매치업 영입 {a.acq.used}회 사용 / 한도 {a.acq.limit}회(남은 {a.left}회), 매치업(월~일)마다 초기화돼요. "
+        if a.acq.used > a.acq.limit:
+            note += "ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요. "
+        note += ("그래서 재편안은 다음 매치업부터 계산했어요. " if a.left == 0
+                 else f"재편안은 매치업마다 최대 {a.acq.limit}명씩 나눴어요. ")
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
 
@@ -711,7 +732,8 @@ def main():
     box = next((b for b in league.box_scores() if me in (b.home_team, b.away_team)), None)
     opp = box and (box.away_team if box.home_team is me else box.home_team)
     opp = opp if hasattr(opp, "roster") else None
-    st = league.espn_request.league_get(params={"view": "mSettings"})["settings"]
+    st_all = league.espn_request.league_get(params={"view": ["mSettings", "mTeam"]})
+    st = st_all["settings"]
     counts = st["rosterSettings"]["lineupSlotCounts"]
     slots = tuple(POSITION_MAP[int(k)] for k, n in counts.items() if int(k) not in (12, 13) for _ in range(n))  # 12 벤치, 13 IR
     limits = {POSITION_MAP[int(k) - 1]: n for k, n in st["rosterSettings"].get("positionLimits", {}).items()
@@ -736,11 +758,15 @@ def main():
     set_spread(rostered + fas)
 
     scores = ((box.home_score, box.away_score) if box.home_team is me else (box.away_score, box.home_score)) if opp else (0, 0)
+    mine = next(t for t in st_all["teams"] if t["id"] == me.team_id)
+    used = mine.get("transactionCounter", {}).get("matchupAcquisitionTotals", {}).get(str(league.currentMatchupPeriod), 0)
+    # 한도: ESPN 설정값. 실제와 다르면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수)으로 덮어쓴다
+    acq = NS(limit=int(os.getenv("ACQ_LIMIT") or st["acquisitionSettings"].get("matchupAcquisitionLimit") or -1), used=int(used),
+             next_start=now.date() + timedelta(days=week_end - today_sp + 1))
     a = analyze(me.roster, opp.roster if opp else [], fas, slots, limits, counts.get("13", 0),
-                today_sp, week_end, league.finalScoringPeriod, scores)
+                today_sp, week_end, league.finalScoringPeriod, scores, acq)
     out = HERE / "report.html"
-    out.write_text(render(league.settings.name, league.standings(), me, box, opp, a,
-                          st["acquisitionSettings"].get("matchupAcquisitionLimit")), encoding="utf-8")
+    out.write_text(render(league.settings.name, league.standings(), me, box, opp, a), encoding="utf-8")
     print(f"저장: {out}")
     if not os.getenv("CI"):
         webbrowser.open(out.as_uri())
