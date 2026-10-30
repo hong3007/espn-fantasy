@@ -398,6 +398,9 @@ if (typeof module !== "undefined") module.exports = { plan };
 # 새 리포트 확인 버튼: 게시된 리포트가 이 화면보다 새것이면 다시 불러오고, 아니면 이유를 알려 준다(별도 <script>라 재편안 계산이 실패해도 동작)
 UPD_JS = r"""
 const SLOTS = [1, 4, 7, 10, 13, 16, 19, 22];  // 자동 실행 시각(한국시간 시, 17분) — report.yml cron과 같아야 한다
+// '지금 새로 만들기': 저장소 주인이 이 제목으로 이슈를 열면 report.yml이 리포트를 새로 만든다(로그인은 GitHub가 확인, 페이지에 열쇠 없음)
+const MAKE = "https://github.com/hong3007/espn-fantasy/issues/new?title=" + encodeURIComponent("새 리포트 만들기") +
+  "&body=" + encodeURIComponent("아래 제출 버튼(Submit new issue)만 누르면 1~2분 뒤 리포트가 새로 올라와요. 이 이슈는 자동으로 닫혀요.");
 function nextSlot(ms) {
   const k = new Date(ms + 9 * 36e5), now = k.getUTCHours() * 60 + k.getUTCMinutes();  // 한국시간을 UTC 필드로 읽는다
   const h = SLOTS.find(s => s * 60 + 17 > now);
@@ -406,18 +409,37 @@ function nextSlot(ms) {
 if (typeof document !== "undefined" && location.protocol.startsWith("http")) {
   const btn = document.querySelector("#upd"), msg = document.querySelector("#updmsg");
   const gen = Date.parse(document.querySelector("meta[name=generated]").getAttribute("content"));
+  const mk = '<a class=mk href="' + MAKE + '" target=_blank rel=noopener>지금 새로 만들기</a>';
   const stale = () => (Date.now() - gen) / 36e5 > 4;
-  const staleMsg = '3시간마다 새로 만들어지는데 4시간이 넘게 지났어요. 자동 실행이 늦거나 멈췄을 수 있어요. <a href="https://github.com/hong3007/espn-fantasy/actions/workflows/report.yml">GitHub에서 직접 실행</a>';
+  const newer = async () => {  // 게시된 리포트가 이 화면보다 새것인가
+    const t = await (await fetch(location.href.split("#")[0], { cache: "no-store" })).text();
+    const m = t.match(/name=generated content="([^"]+)"/);
+    return !!m && Date.parse(m[1]) > gen;
+  };
+  let polling = 0;
+  const poll = async () => {  // '지금 새로 만들기'를 누른 뒤 15초마다 확인해 새 리포트가 올라오면 바로 바꾼다(최대 6분)
+    if (polling) return;
+    polling = Date.now();
+    msg.textContent = "GitHub에서 제출하면 1~2분 뒤 자동으로 새 리포트로 바뀌어요…";
+    while (Date.now() - polling < 6 * 60e3) {
+      await new Promise(r => setTimeout(r, 15e3));
+      try { if (await newer()) { location.reload(); return; } } catch (err) {}
+    }
+    polling = 0;
+    msg.innerHTML = "아직 새 리포트가 없어요. GitHub에서 제출했는지 확인해 주세요. " + mk;
+  };
   btn.hidden = false;
-  if (stale()) msg.innerHTML = staleMsg;
+  if (stale()) msg.innerHTML = "3시간마다 새로 만들어지는데 4시간이 넘게 지났어요. 자동 실행이 늦어졌을 수 있어요. " + mk;
+  msg.addEventListener("click", e => { if (e.target.closest("a.mk")) poll(); });
+  document.addEventListener("visibilitychange", async () => {  // GitHub 탭에서 돌아오면 바로 한 번 확인
+    if (polling && !document.hidden) try { if (await newer()) location.reload(); } catch (err) {}
+  });
   btn.addEventListener("click", async () => {
     btn.disabled = true; msg.textContent = "확인하는 중…";
     try {
-      const t = await (await fetch(location.href.split("#")[0], { cache: "no-store" })).text();
-      const m = t.match(/name=generated content="([^"]+)"/);
-      if (m && Date.parse(m[1]) > gen) { location.reload(); return; }
-      if (stale()) msg.innerHTML = "더 새로운 리포트가 아직 없어요. " + staleMsg;
-      else msg.textContent = "이미 최신이에요. 다음 새 리포트는 " + nextSlot(Date.now()) + "쯤 나와요.";
+      if (await newer()) { location.reload(); return; }
+      msg.innerHTML = (stale() ? "더 새로운 리포트가 아직 없어요. 자동 실행이 늦어졌을 수 있어요. "
+                               : "이미 최신이에요. 다음 새 리포트는 " + nextSlot(Date.now()) + "쯤 나와요. 지금 바로 필요하면 ") + mk;
     } catch (err) { msg.textContent = "확인하지 못했어요. 인터넷 연결을 확인해 보세요."; }
     btn.disabled = false;
   });

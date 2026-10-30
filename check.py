@@ -159,6 +159,10 @@ if node:
     js = report.UPD_JS + "const K = (h, m) => Date.UTC(2026, 9, 31, h - 9, m); console.log(JSON.stringify([nextSlot(K(1, 4)), nextSlot(K(1, 17)), nextSlot(K(1, 18)), nextSlot(K(12, 45)), nextSlot(K(22, 30)), nextSlot(K(0, 0))]))"
     got = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, encoding="utf-8", check=True).stdout)
     assert got == ["1시 17분", "4시 17분", "4시 17분", "13시 17분", "내일 1시 17분", "1시 17분"], got
+# '지금 새로 만들기': 이슈 링크가 있고, workflow는 저장소 주인이 연 그 제목의 이슈에만 실행
+wf = (report.HERE / ".github/workflows/report.yml").read_text(encoding="utf-8")
+assert "issues/new?title=" in report.UPD_JS and 'encodeURIComponent("새 리포트 만들기")' in report.UPD_JS
+assert "github.event.issue.user.login == github.repository_owner" in wf and "startsWith(github.event.issue.title, '새 리포트 만들기')" in wf
 # 자동 실행 시각이 workflow cron(UTC)과 같은 목록인지
 cron = re.search(r'cron: "17 ([\d,]+) \* \* \*"', (report.HERE / ".github/workflows/report.yml").read_text(encoding="utf-8")).group(1)
 assert sorted((int(h) + 9) % 24 for h in cron.split(",")) == [int(x) for x in re.search(r"SLOTS = \[([\d, ]+)\]", report.UPD_JS).group(1).split(",")], "UPD_JS SLOTS와 cron이 다름"
