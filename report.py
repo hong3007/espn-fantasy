@@ -427,6 +427,13 @@ border:1px solid var(--line);border-left:4px solid var(--ball);border-radius:8px
 .arrow{font:700 1.3rem var(--num);color:var(--muted)}
 .gain{font:700 1.5rem var(--num);color:var(--good);text-align:right}
 .moves .gain small{display:block;font:400 .72rem var(--text);color:var(--muted);text-align:right}
+.quota{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--good);border-radius:8px;padding:10px 14px;margin:0 0 12px}
+.quota.zero{border-left-color:var(--bad)}
+.q-main{margin:0;font-weight:600}
+.q-main b{font:700 1.4rem var(--num);color:var(--good)}
+.quota.zero .q-main b{color:var(--bad)}
+.q-main span{font-weight:400;font-size:.88rem;color:var(--muted)}
+.q-sub{margin:4px 0 0;font-size:.92rem}
 .pills{list-style:none;padding:0;margin:0 0 6px;display:flex;flex-wrap:wrap;gap:8px}
 .pill{display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:999px;
 padding:4px 5px 4px 12px;font-weight:600}
@@ -529,12 +536,16 @@ def render(league_name, standings, me, box, opp, a):
                     "base": a.base.total, "after": a.new.total}
     script = "const D=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";" + PLAN_JS  # <!--·</script 조합이 스크립트를 끊지 않게
     note = ""
+    quota = ""  # 영입 한도 안내: 재편안 바로 위에 크게(남은 횟수가 0이면 빨간색)
     if a.acq.limit > 0:
-        note = f"이번 매치업 영입 {a.acq.used}회 사용 / 한도 {a.acq.limit}회(남은 {a.left}회), 매치업(월~일)마다 초기화돼요. "
+        sub = (f"다 썼어요. 재편안은 다음 매치업({n0.month}/{n0.day} {'월화수목금토일'[n0.weekday()]})부터예요." if a.left == 0 and n0
+               else "다 썼어요. 재편안은 다음 매치업부터예요." if a.left == 0
+               else f"재편안은 매치업마다 최대 {a.acq.limit}명씩 나눴어요.")
+        sub += " 매치업(월~일)마다 초기화돼요."
         if a.acq.used > a.acq.limit:
-            note += "ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요. "
-        note += ("그래서 재편안은 다음 매치업부터 계산했어요. " if a.left == 0
-                 else f"재편안은 매치업마다 최대 {a.acq.limit}명씩 나눴어요. ")
+            sub += " ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요."
+        quota = (f'<div class="quota{" zero" if a.left == 0 else ""}"><p class=q-main>이번 매치업 영입 <b>{a.left}회 남음</b> '
+                 f'<span>({a.acq.used}회 사용 / 한도 {a.acq.limit}회)</span></p><p class=q-sub>{e(sub)}</p></div>')
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
 
@@ -616,7 +627,7 @@ def render(league_name, standings, me, box, opp, a):
 <div><h1>{e(me.team_name)}</h1><p class=meta><span>{e(league_name)}</span><span>{rank}위</span><span>{me.wins}승 {me.losses}패</span></p></div>
 <p class=date>{now.month}월 {now.day}일 {now.hour}시 기준</p></header>
 
-<h2>재편안</h2><ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
+<h2>재편안</h2>{quota}<ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
 <script>{script}</script>
 
 <h2>포지션 구성</h2><div class=board>{board}</div>

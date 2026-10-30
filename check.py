@@ -135,7 +135,7 @@ assert page.count("<script>") == page.count("</script>") == 1, "데이터 안의
 bye = report.render("우리리그", [me_t, other], me_t, None, None, a)
 assert '과다</span> → <span class="tag spare">적정' in bye and '부족</span> → <span class="tag spare">적정' in bye, "PG 3→2, C 1→2"
 assert "&lt;b&gt;내팀" in page and "<b>내팀" not in page and "<img src=x>" not in page, "ESPN 문자열은 이스케이프"
-assert "data:image/png;base64," in page and "apple-touch-icon" in page and "이번 매치업 영입 0회 사용 / 한도 1회(남은 1회)" in page
+assert "data:image/png;base64," in page and "apple-touch-icon" in page and "영입 <b>1회 남음</b>" in page and "(0회 사용 / 한도 1회)" in page
 assert "BYE" in bye
 
 # 영입 한도: 남은 횟수에 맞춰 주별 배정, 다 썼으면 다음 매치업부터 계산
@@ -147,7 +147,8 @@ assert x.left == 0 and x.week_of == [1, 2, 3] and x.sps.start == 4, (x.left, x.w
 assert mk(2, 1).week_of == [0, 1, 1] and mk(-1, 0).week_of == [0, 0, 0]
 assert mk(1, 7).left == 0, "한도보다 많이 썼어도 남은 횟수는 0"
 px = report.render("우리리그", [me_t, other], me_t, None, None, x)
-assert "한도 1회(남은 0회)" in px and "다음 매치업부터 계산" in px, "다 썼으면 안내"
+assert 'class="quota zero"' in px and "<b>0회 남음</b>" in px and "다음 매치업(11/2 월)부터예요" in px, "다 썼으면 안내"
+assert px.index("class=\"quota zero\"") < px.index("id=pills"), "한도 안내는 재편안(알약) 위에"
 assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매치업(11/2)부터 " in px, "주별 날짜 표기"
 assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
