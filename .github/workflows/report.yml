@@ -1,9 +1,10 @@
-# 매일 한국시간 07:00(그리고 Actions 탭의 Run workflow 버튼)에 리포트를 만들어 GitHub Pages에 올린다.
+# 3시간마다(한국시간 01·04·07·10·13·16·19·22시, 그리고 Actions 탭의 Run workflow 버튼) 리포트를 만들어 GitHub Pages에 올린다.
+# cron은 UTC라 한국시간 07:00 = 22:00. GitHub 예약 실행은 몇 분 밀릴 수 있다.
 # 필요한 저장소 설정: Secrets(ESPN_S2, SWID), Settings → Pages → Source: GitHub Actions
 name: 리포트 만들기
 on:
   schedule:
-    - cron: "0 22 * * *"
+    - cron: "0 1,4,7,10,13,16,19,22 * * *"
   workflow_dispatch:
 permissions:
   actions: write  # 아래 '자동 실행 켜기' 단계용
