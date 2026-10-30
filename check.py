@@ -131,7 +131,8 @@ box = NS(home_team=other, away_team=me_t, home_score=111.0, away_score=99.0)
 page = report.render("우리리그", [me_t, other], me_t, box, other, a2)
 assert "<p class=final>209</p>" in page and "<p class=final>411</p>" in page, "현재 점수 + 남은 예상"
 assert "방출 → C2" in page and "id=pills" in page and "내 승률" in page and "80% 범위" in page
-assert page.count("<script>") == page.count("</script>") == 1, "데이터 안의 </ 가 스크립트를 끊으면 안 됨"
+assert page.count("<script>") == page.count("</script>") == 2, "데이터 안의 </ 가 스크립트를 끊으면 안 됨"
+assert re.search(r'name=generated content="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"', page) and "id=upd" in page and "id=updmsg" in page, "새 리포트 확인 버튼"
 bye = report.render("우리리그", [me_t, other], me_t, None, None, a)
 assert '과다</span> → <span class="tag spare">적정' in bye and '부족</span> → <span class="tag spare">적정' in bye, "PG 3→2, C 1→2"
 assert "&lt;b&gt;내팀" in page and "<b>내팀" not in page and "<img src=x>" not in page, "ESPN 문자열은 이스케이프"
@@ -152,6 +153,15 @@ assert px.index("class=\"quota zero\"") < px.index("id=pills"), "한도 안내�
 assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매치업(11/2)부터 " in px, "주별 날짜 표기"
 assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
+
+# 새 리포트 확인: 다음 자동 실행 시각(한국시간 1·4·…·22시 17분)을 올바로 계산하는지 node로
+if node:
+    js = report.UPD_JS + "const K = (h, m) => Date.UTC(2026, 9, 31, h - 9, m); console.log(JSON.stringify([nextSlot(K(1, 4)), nextSlot(K(1, 17)), nextSlot(K(1, 18)), nextSlot(K(12, 45)), nextSlot(K(22, 30)), nextSlot(K(0, 0))]))"
+    got = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, encoding="utf-8", check=True).stdout)
+    assert got == ["1시 17분", "4시 17분", "4시 17분", "13시 17분", "내일 1시 17분", "1시 17분"], got
+# 자동 실행 시각이 workflow cron(UTC)과 같은 목록인지
+cron = re.search(r'cron: "17 ([\d,]+) \* \* \*"', (report.HERE / ".github/workflows/report.yml").read_text(encoding="utf-8")).group(1)
+assert sorted((int(h) + 9) % 24 for h in cron.split(",")) == [int(x) for x in re.search(r"SLOTS = \[([\d, ]+)\]", report.UPD_JS).group(1).split(",")], "UPD_JS SLOTS와 cron이 다름"
 
 # CI 설치 목록은 requirements.txt의 부분집합(버전이 서로 어긋나면 안 됨)
 ci = set((report.HERE / "requirements-ci.txt").read_text(encoding="utf-8").split())

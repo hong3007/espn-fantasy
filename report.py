@@ -395,6 +395,37 @@ if (typeof module !== "undefined") module.exports = { plan };
 """
 
 
+# 새 리포트 확인 버튼: 게시된 리포트가 이 화면보다 새것이면 다시 불러오고, 아니면 이유를 알려 준다(별도 <script>라 재편안 계산이 실패해도 동작)
+UPD_JS = r"""
+const SLOTS = [1, 4, 7, 10, 13, 16, 19, 22];  // 자동 실행 시각(한국시간 시, 17분) — report.yml cron과 같아야 한다
+function nextSlot(ms) {
+  const k = new Date(ms + 9 * 36e5), now = k.getUTCHours() * 60 + k.getUTCMinutes();  // 한국시간을 UTC 필드로 읽는다
+  const h = SLOTS.find(s => s * 60 + 17 > now);
+  return h === undefined ? "내일 1시 17분" : h + "시 17분";
+}
+if (typeof document !== "undefined" && location.protocol.startsWith("http")) {
+  const btn = document.querySelector("#upd"), msg = document.querySelector("#updmsg");
+  const gen = Date.parse(document.querySelector("meta[name=generated]").getAttribute("content"));
+  const stale = () => (Date.now() - gen) / 36e5 > 4;
+  const staleMsg = '3시간마다 새로 만들어지는데 4시간이 넘게 지났어요. 자동 실행이 늦거나 멈췄을 수 있어요. <a href="https://github.com/hong3007/espn-fantasy/actions/workflows/report.yml">GitHub에서 직접 실행</a>';
+  btn.hidden = false;
+  if (stale()) msg.innerHTML = staleMsg;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; msg.textContent = "확인하는 중…";
+    try {
+      const t = await (await fetch(location.href.split("#")[0], { cache: "no-store" })).text();
+      const m = t.match(/name=generated content="([^"]+)"/);
+      if (m && Date.parse(m[1]) > gen) { location.reload(); return; }
+      if (stale()) msg.innerHTML = "더 새로운 리포트가 아직 없어요. " + staleMsg;
+      else msg.textContent = "이미 최신이에요. 다음 새 리포트는 " + nextSlot(Date.now()) + "쯤 나와요.";
+    } catch (err) { msg.textContent = "확인하지 못했어요. 인터넷 연결을 확인해 보세요."; }
+    btn.disabled = false;
+  });
+}
+if (typeof module !== "undefined") module.exports = { nextSlot };
+"""
+
+
 CSS = """
 :root{color-scheme:light dark;--bg:#F1F3F6;--surface:#FFF;--ink:#17202B;--muted:#5A6575;--line:#DCE1E8;
 --ball:#C2500E;--on-ball:#fff;--good:#14804D;--bad:#B4382F;--spare:#2B6797;--wood:#D6A262;--plank:#CB9654;--court:#FFF4E2;--on-wood:#2B1B0C;
@@ -410,6 +441,12 @@ p{margin:0}
 h1{font:700 1.6rem/1.15 var(--num);margin:0}
 .meta{color:var(--muted);font-size:.9rem;display:flex;gap:12px;flex-wrap:wrap}
 .date{margin-left:auto;color:var(--muted);font-size:.85rem}
+#upd{margin-left:6px;min-height:36px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:.85rem;cursor:pointer}
+#upd:focus-visible{outline:2px solid var(--ball);outline-offset:2px}
+#upd:disabled{opacity:.6}
+#updmsg:empty{display:none}
+#updmsg{margin:6px 0 0}
+#updmsg a{color:var(--ink)}
 h2{font-size:1.1rem;margin:40px 0 10px}
 .lead{margin-bottom:12px}
 .lead b{font:700 1.15em var(--num)}
@@ -617,18 +654,22 @@ def render(league_name, standings, me, box, opp, a):
     png = base64.b64encode(icon_png()).decode()
     svg = "data:image/svg+xml," + quote(ICON_SVG)
     now = datetime.now()
+    gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return f"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=generated content="{gen}">
 <title>{e(me.team_name)} 로스터 재편</title>
 <link rel=icon href="{svg}"><link rel=icon type=image/png href="data:image/png;base64,{png}">
 <link rel=apple-touch-icon href="data:image/png;base64,{png}">
 <style>{CSS}</style></head><body><main>
 <header class=top><img class=logo src="{svg}" alt="">
 <div><h1>{e(me.team_name)}</h1><p class=meta><span>{e(league_name)}</span><span>{rank}위</span><span>{me.wins}승 {me.losses}패</span></p></div>
-<p class=date>{now.month}월 {now.day}일 {now.hour}시 기준</p></header>
+<p class=date>{now.month}월 {now.day}일 {now.hour}시 기준 <button type=button id=upd hidden>새 리포트 확인</button></p></header>
+<p id=updmsg class=note role=status></p>
 
 <h2>재편안</h2>{quota}<ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
 <script>{script}</script>
+<script>{UPD_JS}</script>
 
 <h2>포지션 구성</h2><div class=board>{board}</div>
 <p class=note>숫자는 그 포지션을 뛸 수 있는 내 선수 수예요(재편 후 바뀌면 → 표시). 여러 포지션 선수는 칸마다 나오고, 진한 이름은 주 포지션,
