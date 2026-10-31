@@ -406,6 +406,14 @@ function nextSlot(ms) {
   const h = SLOTS.find(s => s * 60 + 17 > now);
   return h === undefined ? "내일 1시 17분" : h + "시 17분";
 }
+function ago(ms) {  // 최근 업데이트가 얼마 전인지
+  const m = Math.floor(ms / 6e4);
+  return m < 1 ? "방금" : m < 60 ? m + "분 전" : m < 1440 ? Math.floor(m / 60) + "시간 " + (m % 60) + "분 전" : Math.floor(m / 1440) + "일 전";
+}
+if (typeof document !== "undefined") {
+  const g = Date.parse(document.querySelector("meta[name=generated]").getAttribute("content"));
+  document.querySelector("#ago").textContent = "(" + ago(Date.now() - g) + ")";
+}
 if (typeof document !== "undefined" && location.protocol.startsWith("http")) {
   const btn = document.querySelector("#upd"), msg = document.querySelector("#updmsg");
   const gen = Date.parse(document.querySelector("meta[name=generated]").getAttribute("content"));
@@ -444,7 +452,7 @@ if (typeof document !== "undefined" && location.protocol.startsWith("http")) {
     btn.disabled = false;
   });
 }
-if (typeof module !== "undefined") module.exports = { nextSlot };
+if (typeof module !== "undefined") module.exports = { nextSlot, ago };
 """
 
 
@@ -463,6 +471,7 @@ p{margin:0}
 h1{font:700 1.6rem/1.15 var(--num);margin:0}
 .meta{color:var(--muted);font-size:.9rem;display:flex;gap:12px;flex-wrap:wrap}
 .date{margin-left:auto;color:var(--muted);font-size:.85rem}
+.date b{color:var(--ink);font-weight:600}
 #upd{margin-left:6px;min-height:36px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:.85rem;cursor:pointer}
 #upd:focus-visible{outline:2px solid var(--ball);outline-offset:2px}
 #upd:disabled{opacity:.6}
@@ -686,7 +695,7 @@ def render(league_name, standings, me, box, opp, a):
 <style>{CSS}</style></head><body><main>
 <header class=top><img class=logo src="{svg}" alt="">
 <div><h1>{e(me.team_name)}</h1><p class=meta><span>{e(league_name)}</span><span>{rank}위</span><span>{me.wins}승 {me.losses}패</span></p></div>
-<p class=date>{now.month}월 {now.day}일 {now.hour}시 기준 <button type=button id=upd hidden>새 리포트 확인</button></p></header>
+<p class=date>최근 업데이트 <b>{now.month}월 {now.day}일 {now.hour:02d}:{now.minute:02d}</b> <span id=ago></span> <button type=button id=upd hidden>새 리포트 확인</button></p></header>
 <p id=updmsg class=note role=status></p>
 
 <h2>재편안</h2>{quota}<ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}

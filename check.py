@@ -156,9 +156,9 @@ assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
 
 # 새 리포트 확인: 다음 자동 실행 시각(한국시간 1·4·…·22시 17분)을 올바로 계산하는지 node로
 if node:
-    js = report.UPD_JS + "const K = (h, m) => Date.UTC(2026, 9, 31, h - 9, m); console.log(JSON.stringify([nextSlot(K(1, 4)), nextSlot(K(1, 17)), nextSlot(K(1, 18)), nextSlot(K(12, 45)), nextSlot(K(22, 30)), nextSlot(K(0, 0))]))"
+    js = report.UPD_JS + "const K = (h, m) => Date.UTC(2026, 9, 31, h - 9, m); console.log(JSON.stringify([nextSlot(K(1, 4)), nextSlot(K(1, 17)), nextSlot(K(1, 18)), nextSlot(K(12, 45)), nextSlot(K(22, 30)), nextSlot(K(0, 0)), ago(30e3), ago(12 * 6e4), ago(125 * 6e4), ago(3 * 864e5)]))"
     got = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, encoding="utf-8", check=True).stdout)
-    assert got == ["1시 17분", "4시 17분", "4시 17분", "13시 17분", "내일 1시 17분", "1시 17분"], got
+    assert got == ["1시 17분", "4시 17분", "4시 17분", "13시 17분", "내일 1시 17분", "1시 17분", "방금", "12분 전", "2시간 5분 전", "3일 전"], got
 # '지금 새로 만들기': 이슈 링크가 있고, workflow는 저장소 주인이 연 그 제목의 이슈에만 실행
 wf = (report.HERE / ".github/workflows/report.yml").read_text(encoding="utf-8")
 assert "issues/new?title=" in report.UPD_JS and 'encodeURIComponent("새 리포트 만들기")' in report.UPD_JS
