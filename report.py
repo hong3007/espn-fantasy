@@ -49,6 +49,35 @@ def icon_png(size=192):
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+# 서비스워커: 항상 최신 리포트를 받고(네트워크 먼저), 인터넷이 없을 때만 마지막으로 받은 것을 보여 준다
+SW_JS = """self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
+self.addEventListener("fetch", e => {
+  const { request: q } = e;  // check.py 보안 검사(Playwright 통신 엿보기 금지)에 걸리지 않게 꺼내 쓴다
+  if (q.method !== "GET" || !q.url.startsWith(self.location.origin)) return;
+  e.respondWith(fetch(q).then(r => {
+    const c = r.clone();
+    caches.open("report").then(x => x.put(q, c));
+    return r;
+  }).catch(() => caches.match(q, { ignoreSearch: true })));
+});
+"""
+
+
+def write_site(html_text, d):
+    """GitHub Pages에 올릴 폴더: 리포트(index.html) + 앱 설치(PWA)에 필요한 manifest·아이콘(192·512)·서비스워커"""
+    d.mkdir(exist_ok=True)
+    (d / "index.html").write_text(html_text, encoding="utf-8")
+    for n in (192, 512):
+        (d / f"icon-{n}.png").write_bytes(icon_png(n))
+    (d / "manifest.webmanifest").write_text(json.dumps({
+        "name": "ESPN 판타지 로스터 재편", "short_name": "로스터 재편", "start_url": "./", "scope": "./",
+        "display": "standalone", "background_color": "#ffffff", "theme_color": "#f07a1a",
+        "icons": [{"src": f"icon-{n}.png", "sizes": f"{n}x{n}", "type": "image/png"} for n in (192, 512)],
+    }, ensure_ascii=False), encoding="utf-8")
+    (d / "sw.js").write_text(SW_JS, encoding="utf-8")
+
+
 def find_my_team(teams, swid):
     """SWID 쿠키 값 = ESPN 회원 ID. 그 회원이 주인인 팀이 내 팀"""
     key = swid.strip("{} ").upper()
@@ -415,6 +444,7 @@ if (typeof document !== "undefined") {
   document.querySelector("#ago").textContent = "(" + ago(Date.now() - g) + ")";
 }
 if (typeof document !== "undefined" && location.protocol.startsWith("http")) {
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});  // 앱 설치(홈 화면) 조건
   const btn = document.querySelector("#upd"), msg = document.querySelector("#updmsg");
   const gen = Date.parse(document.querySelector("meta[name=generated]").getAttribute("content"));
   const mk = '<a class=mk href="' + MAKE + '" target=_blank rel=noopener>지금 새로 만들기</a>';
@@ -692,6 +722,7 @@ def render(league_name, standings, me, box, opp, a):
 <title>{e(me.team_name)} 로스터 재편</title>
 <link rel=icon href="{svg}"><link rel=icon type=image/png href="data:image/png;base64,{png}">
 <link rel=apple-touch-icon href="data:image/png;base64,{png}">
+<link rel=manifest href="manifest.webmanifest"><meta name=theme-color content="#f07a1a">
 <style>{CSS}</style></head><body><main>
 <header class=top><img class=logo src="{svg}" alt="">
 <div><h1>{e(me.team_name)}</h1><p class=meta><span>{e(league_name)}</span><span>{rank}위</span><span>{me.wins}승 {me.losses}패</span></p></div>
@@ -849,9 +880,12 @@ def main():
     a = analyze(me.roster, opp.roster if opp else [], fas, slots, limits, counts.get("13", 0),
                 today_sp, week_end, league.finalScoringPeriod, scores, acq)
     out = HERE / "report.html"
-    out.write_text(render(league.settings.name, league.standings(), me, box, opp, a), encoding="utf-8")
+    page = render(league.settings.name, league.standings(), me, box, opp, a)
+    out.write_text(page, encoding="utf-8")
     print(f"저장: {out}")
-    if not os.getenv("CI"):
+    if os.getenv("CI"):
+        write_site(page, HERE / "site")
+    else:
         webbrowser.open(out.as_uri())
 
 

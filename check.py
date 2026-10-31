@@ -154,6 +154,20 @@ assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매�
 assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
 
+# 앱 설치(PWA): 페이지가 manifest를 가리키고, manifest의 아이콘(192·512)·서비스워커 파일이 함께 만들어지는지
+import tempfile
+from pathlib import Path
+assert 'rel=manifest href="manifest.webmanifest"' in page and 'serviceWorker.register("sw.js")' in page
+with tempfile.TemporaryDirectory() as td:
+    report.write_site(page, Path(td) / "site")
+    s = Path(td) / "site"
+    man = json.loads((s / "manifest.webmanifest").read_text(encoding="utf-8"))
+    assert man["display"] == "standalone" and man["start_url"] == "./" and {i["sizes"] for i in man["icons"]} == {"192x192", "512x512"}
+    for i in man["icons"]:
+        b = (s / i["src"]).read_bytes()
+        assert b[:8] == b"\x89PNG\r\n\x1a\n" and int.from_bytes(b[16:20], "big") == int(i["sizes"].split("x")[0]), i
+    assert (s / "index.html").read_text(encoding="utf-8") == page and '"fetch"' in (s / "sw.js").read_text(encoding="utf-8")
+
 # 새 리포트 확인: 다음 자동 실행 시각(한국시간 1·4·…·22시 17분)을 올바로 계산하는지 node로
 if node:
     js = report.UPD_JS + "const K = (h, m) => Date.UTC(2026, 9, 31, h - 9, m); console.log(JSON.stringify([nextSlot(K(1, 4)), nextSlot(K(1, 17)), nextSlot(K(1, 18)), nextSlot(K(12, 45)), nextSlot(K(22, 30)), nextSlot(K(0, 0)), ago(30e3), ago(12 * 6e4), ago(125 * 6e4), ago(3 * 864e5)]))"
