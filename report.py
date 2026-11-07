@@ -96,8 +96,12 @@ def last_season(raw, season):
     return 0.0, 0
 
 
-def estimate(cur, gp, last_avg, last_gp, proj):
-    """경기당 추정 점수: 시즌 초반 몇 경기로 튀는 올 시즌 평균을 지난 시즌 평균·ESPN 예상 쪽으로 당긴다"""
+def estimate(cur, gp, last_avg, last_gp, proj, recent=(0.0, 0)):
+    """경기당 추정 점수: 시즌 초반 몇 경기로 튀는 올 시즌 평균을 지난 시즌 평균·ESPN 예상 쪽으로 당긴다.
+    recent = 최근 15일 (평균, 경기 수). 그 경기들은 한 번 더 세어(가중치 2배) 주전 승격·출전 시간 변화 같은 역할 변화를 빨리 반영한다"""
+    r_avg, r_n = recent
+    if gp and 0 < r_n <= gp:
+        cur = (gp * cur + r_n * r_avg) / (gp + r_n)
     prior = [v for v, ok in ((last_avg, last_gp >= 10), (proj, proj > 0)) if ok]
     prior = sum(prior) / len(prior) if prior else cur
     return (gp * cur + K * prior) / (gp + K)
@@ -109,7 +113,9 @@ def prepare(p, raw, year, today_sp, today):
     proj = p.stats.get(f"{year}_projected", {}).get("total") or {}
     p.gp = int(total.get("GP", 0))
     p.last_avg, p.last_gp = last_season(raw, year - 1)
-    p.est = estimate(p.avg_points, p.gp, p.last_avg, p.last_gp, p.projected_avg_points)
+    l15 = p.stats.get(f"{year}_last_15", {})  # 최근 15일(경기 수가 아니라 날짜 기준)
+    p.recent = (l15.get("applied_avg") or 0.0, int((l15.get("total") or {}).get("GP") or 0))
+    p.est = estimate(p.avg_points, p.gp, p.last_avg, p.last_gp, p.projected_avg_points, p.recent)
     # ESPN 예상 출전 경기는 부상 이력을 이미 반영한다. 지난 시즌 출전만 쓰면 한 번 크게 다친 선수가 반값이 된다
     gp = proj.get("GP") or p.last_gp
     p.dur = min(1, max(.4, gp / 82)) if gp else .85  # ponytail: 자료 없는 신인은 85%로 가정
@@ -282,7 +288,9 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
             new = prob_above(diff + wk[0][2], sd)
             if new - win >= .1:  # 승률이 10%p 이상 오를 때만 1순위를 미루라고 권한다
                 acts.append(f"이번 매치업 승률 {win:.0%} → {new:.0%}: {wk[0][0].name} 영입, {wk[0][1].name} 방출이면 "
-                            f"남은 기간 +{wk[0][2]:.0f}점이에요. 대신 재편안 1번은 다음 주로 밀려요.")
+                            f"남은 기간 +{wk[0][2]:.0f}점이에요."
+                            + (" 대신 재편안 1번은 다음 주로 밀려요." if acq.limit > 0
+                               else " 대신 재편안 1번은 하루 밀려요." if getattr(acq, "daily", 0) else ""))
     return NS(slots=slots, days=len(sps), sps=sps, base=base, new=simulate(after, sps, slots, today_sp),
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
@@ -426,15 +434,9 @@ if (typeof module !== "undefined") module.exports = { plan };
 
 # 새 리포트 확인 버튼: 게시된 리포트가 이 화면보다 새것이면 다시 불러오고, 아니면 이유를 알려 준다(별도 <script>라 재편안 계산이 실패해도 동작)
 UPD_JS = r"""
-const SLOTS = [1, 4, 7, 10, 13, 16, 19, 22];  // 자동 실행 시각(한국시간 시, 17분) — report.yml cron과 같아야 한다
 // '지금 새로 만들기': 저장소 주인이 이 제목으로 이슈를 열면 report.yml이 리포트를 새로 만든다(로그인은 GitHub가 확인, 페이지에 열쇠 없음)
 const MAKE = "https://github.com/hong3007/espn-fantasy/issues/new?title=" + encodeURIComponent("새 리포트 만들기") +
   "&body=" + encodeURIComponent("아래 제출 버튼(Submit new issue)만 누르면 1~2분 뒤 리포트가 새로 올라와요. 이 이슈는 자동으로 닫혀요.");
-function nextSlot(ms) {
-  const k = new Date(ms + 9 * 36e5), now = k.getUTCHours() * 60 + k.getUTCMinutes();  // 한국시간을 UTC 필드로 읽는다
-  const h = SLOTS.find(s => s * 60 + 17 > now);
-  return h === undefined ? "내일 1시 17분" : h + "시 17분";
-}
 function ago(ms) {  // 최근 업데이트가 얼마 전인지
   const m = Math.floor(ms / 6e4);
   return m < 1 ? "방금" : m < 60 ? m + "분 전" : m < 1440 ? Math.floor(m / 60) + "시간 " + (m % 60) + "분 전" : Math.floor(m / 1440) + "일 전";
@@ -467,7 +469,7 @@ if (typeof document !== "undefined" && location.protocol.startsWith("http")) {
     msg.innerHTML = "아직 새 리포트가 없어요. GitHub에서 제출했는지 확인해 주세요. " + mk;
   };
   btn.hidden = false;
-  if (stale()) msg.innerHTML = "3시간마다 새로 만들어지는데 4시간이 넘게 지났어요. 자동 실행이 늦어졌을 수 있어요. " + mk;
+  if (stale()) msg.innerHTML = "4시간 넘게 새 리포트가 없어요. 자동 실행(매시간 시도)을 GitHub가 늦추거나 건너뛴 것 같아요. " + mk;
   msg.addEventListener("click", e => { if (e.target.closest("a.mk")) poll(); });
   document.addEventListener("visibilitychange", async () => {  // GitHub 탭에서 돌아오면 바로 한 번 확인
     if (polling && !document.hidden) try { if (await newer()) location.reload(); } catch (err) {}
@@ -477,12 +479,12 @@ if (typeof document !== "undefined" && location.protocol.startsWith("http")) {
     try {
       if (await newer()) { location.reload(); return; }
       msg.innerHTML = (stale() ? "더 새로운 리포트가 아직 없어요. 자동 실행이 늦어졌을 수 있어요. "
-                               : "이미 최신이에요. 다음 새 리포트는 " + nextSlot(Date.now()) + "쯤 나와요. 지금 바로 필요하면 ") + mk;
+                               : "이미 최신이에요. 매시간 새로 만들기를 시도하지만 GitHub 사정으로 늦어질 수 있어요. 지금 바로 필요하면 ") + mk;
     } catch (err) { msg.textContent = "확인하지 못했어요. 인터넷 연결을 확인해 보세요."; }
     btn.disabled = false;
   });
 }
-if (typeof module !== "undefined") module.exports = { nextSlot, ago };
+if (typeof module !== "undefined") module.exports = { ago };
 """
 
 
@@ -644,6 +646,9 @@ def render(league_name, standings, me, box, opp, a):
             sub += " ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요."
         quota = (f'<div class="quota{" zero" if a.left == 0 else ""}"><p class=q-main>이번 매치업 영입 <b>{a.left}회 남음</b> '
                  f'<span>({a.acq.used}회 사용 / 한도 {a.acq.limit}회)</span></p><p class=q-sub>{e(sub)}</p></div>')
+    elif getattr(a.acq, "daily", 0):  # 하루 한도만 있는 리그: 매치업 횟수 제한 없음
+        quota = (f'<div class=quota><p class=q-main>영입 한도 <b>하루 {a.acq.daily}명</b> <span>(이번 매치업 {a.acq.used}명 영입)</span></p>'
+                 f'<p class=q-sub>매치업 횟수 제한은 없어요. 재편안을 순서대로 하루 {a.acq.daily}명씩 하면 돼요(오늘 이미 영입했으면 내일부터).</p></div>')
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
 
@@ -874,9 +879,13 @@ def main():
     scores = ((box.home_score, box.away_score) if box.home_team is me else (box.away_score, box.home_score)) if opp else (0, 0)
     mine = next(t for t in st_all["teams"] if t["id"] == me.team_id)
     used = mine.get("transactionCounter", {}).get("matchupAcquisitionTotals", {}).get(str(league.currentMatchupPeriod), 0)
-    # 한도: ESPN 설정값. 실제와 다르면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수)으로 덮어쓴다
-    acq = NS(limit=int(os.getenv("ACQ_LIMIT") or st["acquisitionSettings"].get("matchupAcquisitionLimit") or -1), used=int(used),
-             next_start=now.date() + timedelta(days=week_end - today_sp + 1))
+    # 한도: ESPN 설정값. matchupLimitPerScoringPeriod면 matchupAcquisitionLimit은 '하루'(스코어링 기간) 한도라
+    # 매치업 횟수 제한은 없다(2026-11-07 확인: 하루 1명, 매치업 2에 7명·3에 6명 영입).
+    # 실제와 다르면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수, 매치업당 횟수)으로 덮어쓴다
+    ast = st["acquisitionSettings"]
+    daily = max(0, int(ast.get("matchupAcquisitionLimit") or 0)) if ast.get("matchupLimitPerScoringPeriod") else 0
+    acq = NS(limit=int(os.getenv("ACQ_LIMIT") or (-1 if daily else ast.get("matchupAcquisitionLimit")) or -1), used=int(used),
+             daily=daily, next_start=now.date() + timedelta(days=week_end - today_sp + 1))
     a = analyze(me.roster, opp.roster if opp else [], fas, slots, limits, counts.get("13", 0),
                 today_sp, week_end, league.finalScoringPeriod, scores, acq)
     out = HERE / "report.html"

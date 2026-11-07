@@ -1,10 +1,11 @@
-# 3시간마다(한국시간 1:17·4:17·7:17·…·22:17, 그리고 Actions 탭의 Run workflow 버튼) 리포트를 만들어 GitHub Pages에 올린다.
-# cron은 UTC(한국시간 -9시). 정각(0분)은 GitHub가 몰려서 예약 실행을 늦추거나 건너뛰는 일이 있어 17분으로 둔다.
+# 매시간 17분(그리고 Actions 탭의 Run workflow 버튼, '새 리포트 만들기' 이슈) 리포트를 만들어 GitHub Pages에 올린다.
+# GitHub는 부하가 많으면 예약 실행을 늦추거나 건너뛴다. 3시간마다(하루 8번)로 두었을 때 실제로는 하루 3번(5시·11시·21시쯤)만 돌아서
+# 매시간 시도한다(2026-11-07). 공개 저장소라 실행 시간 비용은 없다. 정각(0분)은 더 몰려서 17분.
 # 필요한 저장소 설정: Secrets(ESPN_S2, SWID), Settings → Pages → Source: GitHub Actions
 name: 리포트 만들기
 on:
   schedule:
-    - cron: "17 1,4,7,10,13,16,19,22 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
   issues:  # 리포트의 '지금 새로 만들기' → 저장소 주인이 '새 리포트 만들기' 이슈를 열면 실행(폰·PC, 로그인은 GitHub가 확인)
     types: [opened]
@@ -39,7 +40,7 @@ jobs:
         env:
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           SWID: ${{ secrets.SWID }}
-          ACQ_LIMIT: ${{ vars.ACQ_LIMIT }}  # 비워 두면 ESPN 설정값(매치업당 영입 한도) 사용
+          ACQ_LIMIT: ${{ vars.ACQ_LIMIT }}  # 매치업당 영입 한도. 비워 두면 ESPN 설정값(하루 한도 리그면 매치업 제한 없음)
           TZ: Asia/Seoul
       - uses: actions/upload-pages-artifact@v3
         with:

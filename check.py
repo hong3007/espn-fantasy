@@ -25,6 +25,10 @@ assert report.last_season(raw, 2026) == (40.0, 50) and report.last_season({}, 20
 assert report.estimate(60, 0, 40, 50, 50) == 45
 assert report.estimate(60, report.K, 40, 50, 50) == 52.5
 assert report.estimate(60, 0, 40, 5, 0) == 60, "지난 시즌 10경기 미만·예상 없음이면 올 시즌 평균 그대로"
+# 최근 15일 경기는 2배 가중: 시즌 10경기 평균 30, 최근 5경기 평균 42 → (300 + 210) / 15 = 34 → K 보정
+assert report.estimate(30, 10, 0, 0, 0, (42, 5)) == 34
+assert report.estimate(30, 10, 0, 0, 0, (42, 10)) == 36 and report.estimate(30, 10, 0, 0, 0, (0, 0)) == 30
+assert report.estimate(30, 3, 0, 0, 0, (42, 5)) == 30, "최근 경기 수가 시즌 경기 수보다 많으면(자료 오류) 무시"
 
 # prepare: 복귀일(지난 날짜면 내일), 출전율(ESPN 예상 없으면 지난 시즌), 빈 부상 값, 이미 시작한 경기 제외
 T = date(2026, 10, 29)
@@ -35,6 +39,10 @@ assert report.prepare(R("ACTIVE", None), raw, 2027, 10, T).dur == 50 / 82
 assert report.prepare(R([], None), {}, 2027, 10, T).injuryStatus is None
 sched = {"9": {"date": datetime(2000, 1, 1)}, "10": {"date": datetime(2999, 1, 1)}, "11": {}}
 assert set(report.prepare(R("ACTIVE", None, sched), {}, 2027, 10, T).schedule) == {"10", "11"}
+p15 = R("ACTIVE", None)
+p15.avg_points, p15.stats = 30, {"2027_total": {"total": {"GP": 10}}, "2027_last_15": {"applied_avg": 42, "total": {"GP": 5}}}
+p15 = report.prepare(p15, {}, 2027, 10, T)
+assert p15.recent == (42, 5) and p15.est == 34, "최근 15일(ESPN last_15)을 읽어 추정에 반영"
 
 # 최적 선발: 욕심내서 G에 먼저 넣으면 틀리는 경우
 assert report.best_lineup([(10, ["PG", "G"]), (8, ["G"])], ("PG", "G"))[0] == 18
@@ -137,7 +145,7 @@ bye = report.render("우리리그", [me_t, other], me_t, None, None, a)
 assert '과다</span> → <span class="tag spare">적정' in bye and '부족</span> → <span class="tag spare">적정' in bye, "PG 3→2, C 1→2"
 assert "&lt;b&gt;내팀" in page and "<b>내팀" not in page and "<img src=x>" not in page, "ESPN 문자열은 이스케이프"
 assert "data:image/png;base64," in page and "apple-touch-icon" in page and "영입 <b>1회 남음</b>" in page and "(0회 사용 / 한도 1회)" in page
-assert "BYE" in bye
+assert "BYE" in bye and "<p class=q-main>" not in bye, "한도 없는 리그는 영입 한도 안내 없음"
 
 # 영입 한도: 남은 횟수에 맞춰 주별 배정, 다 썼으면 다음 매치업부터 계산
 mk = lambda limit, used: report.analyze(roster + [out], [], [c2, c4, bad], slots, {}, 1, 1, 3, 6,
@@ -152,6 +160,12 @@ assert 'class="quota zero"' in px and "<b>0회 남음</b>" in px and "다음 매
 assert px.index("class=\"quota zero\"") < px.index("id=pills"), "한도 안내는 재편안(알약) 위에"
 assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매치업(11/2)부터 " in px, "주별 날짜 표기"
 assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
+# 하루 한도만 있는 리그(ESPN matchupLimitPerScoringPeriod): 매치업 횟수 제한 없이 순위대로, 안내는 '하루 1명'
+dl = report.analyze(roster + [out], [], [c2, c4, bad], slots, {}, 1, 1, 3, 6,
+                    acq=NS(limit=-1, used=6, daily=1, next_start=date(2026, 11, 2)))
+assert dl.left is None and dl.week_of == [0, 0, 0] and dl.sps.start == 1
+pd = report.render("우리리그", [me_t, other], me_t, None, None, dl)
+assert "하루 1명</b>" in pd and "이번 매치업 6명 영입" in pd and "회 남음" not in pd and pd.index("하루 1명") < pd.index("id=pills")
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
 
 # 앱 설치(PWA): 페이지가 manifest를 가리키고, manifest의 아이콘(192·512)·서비스워커 파일이 함께 만들어지는지
@@ -168,18 +182,16 @@ with tempfile.TemporaryDirectory() as td:
         assert b[:8] == b"\x89PNG\r\n\x1a\n" and int.from_bytes(b[16:20], "big") == int(i["sizes"].split("x")[0]), i
     assert (s / "index.html").read_text(encoding="utf-8") == page and '"fetch"' in (s / "sw.js").read_text(encoding="utf-8")
 
-# 새 리포트 확인: 다음 자동 실행 시각(한국시간 1·4·…·22시 17분)을 올바로 계산하는지 node로
+# 최근 업데이트 '몇 분 전' 표시를 node로
 if node:
-    js = report.UPD_JS + "const K = (h, m) => Date.UTC(2026, 9, 31, h - 9, m); console.log(JSON.stringify([nextSlot(K(1, 4)), nextSlot(K(1, 17)), nextSlot(K(1, 18)), nextSlot(K(12, 45)), nextSlot(K(22, 30)), nextSlot(K(0, 0)), ago(30e3), ago(12 * 6e4), ago(125 * 6e4), ago(3 * 864e5)]))"
+    js = report.UPD_JS + "console.log(JSON.stringify([ago(30e3), ago(12 * 6e4), ago(125 * 6e4), ago(3 * 864e5)]))"
     got = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, encoding="utf-8", check=True).stdout)
-    assert got == ["1시 17분", "4시 17분", "4시 17분", "13시 17분", "내일 1시 17분", "1시 17분", "방금", "12분 전", "2시간 5분 전", "3일 전"], got
+    assert got == ["방금", "12분 전", "2시간 5분 전", "3일 전"], got
 # '지금 새로 만들기': 이슈 링크가 있고, workflow는 저장소 주인이 연 그 제목의 이슈에만 실행
 wf = (report.HERE / ".github/workflows/report.yml").read_text(encoding="utf-8")
 assert "issues/new?title=" in report.UPD_JS and 'encodeURIComponent("새 리포트 만들기")' in report.UPD_JS
 assert "github.event.issue.user.login == github.repository_owner" in wf and "startsWith(github.event.issue.title, '새 리포트 만들기')" in wf
-# 자동 실행 시각이 workflow cron(UTC)과 같은 목록인지
-cron = re.search(r'cron: "17 ([\d,]+) \* \* \*"', (report.HERE / ".github/workflows/report.yml").read_text(encoding="utf-8")).group(1)
-assert sorted((int(h) + 9) % 24 for h in cron.split(",")) == [int(x) for x in re.search(r"SLOTS = \[([\d, ]+)\]", report.UPD_JS).group(1).split(",")], "UPD_JS SLOTS와 cron이 다름"
+assert 'cron: "17 * * * *"' in wf and "매시간" in report.UPD_JS, "자동 실행은 매시간 시도(안내 문구와 같아야 함)"
 
 # CI 설치 목록은 requirements.txt의 부분집합(버전이 서로 어긋나면 안 됨)
 ci = set((report.HERE / "requirements-ci.txt").read_text(encoding="utf-8").split())
