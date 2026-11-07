@@ -160,12 +160,9 @@ assert 'class="quota zero"' in px and "<b>0회 남음</b>" in px and "다음 매
 assert px.index("class=\"quota zero\"") < px.index("id=pills"), "한도 안내는 재편안(알약) 위에"
 assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매치업(11/2)부터 " in px, "주별 날짜 표기"
 assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
-# 하루 한도만 있는 리그(ESPN matchupLimitPerScoringPeriod): 매치업 횟수 제한 없이 순위대로, 안내는 '하루 1명'
-dl = report.analyze(roster + [out], [], [c2, c4, bad], slots, {}, 1, 1, 3, 6,
-                    acq=NS(limit=-1, used=6, daily=1, next_start=date(2026, 11, 2)))
-assert dl.left is None and dl.week_of == [0, 0, 0] and dl.sps.start == 1
-pd = report.render("우리리그", [me_t, other], me_t, None, None, dl)
-assert "하루 1명</b>" in pd and "이번 매치업 6명 영입" in pd and "회 남음" not in pd and pd.index("하루 1명") < pd.index("id=pills")
+# 매치업당 6회: 4회 썼으면 '2회 남음'
+p6 = report.render("우리리그", [me_t, other], me_t, None, None, mk(report.ACQ_LIMIT, 4))
+assert "영입 <b>2회 남음</b>" in p6 and "(4회 사용 / 한도 6회)" in p6
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
 
 # 앱 설치(PWA): 페이지가 manifest를 가리키고, manifest의 아이콘(192·512)·서비스워커 파일이 함께 만들어지는지

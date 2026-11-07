@@ -22,6 +22,7 @@ WINDOW = 21  # 영입 효과를 보는 기간(일). 매치업당 영입 한도�
 MOVES = 3    # 재편안 교체 수(매치업당 1명이면 3주치)
 MIN_GAIN = 5  # 이 점수(WINDOW일 선발 점수)보다 적게 오르는 교체는 영입 한도를 쓸 가치가 없어 추천하지 않는다
 CV_M = 10    # 선수 개인의 경기 변동계수를 리그 공통값 쪽으로 당기는 강도(경기 수)
+ACQ_LIMIT = 6  # 매치업(주)당 영입 한도. ESPN API에는 이 값이 없어(설정의 1은 다른 뜻) 사용자 확인값을 쓴다(2026-11-08)
 STATUS = {"OUT": "OUT", "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP"}  # ESPN 판타지에서 쓰는 용어 그대로(사용자 요청)
 
 ICON_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
@@ -288,9 +289,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
             new = prob_above(diff + wk[0][2], sd)
             if new - win >= .1:  # 승률이 10%p 이상 오를 때만 1순위를 미루라고 권한다
                 acts.append(f"이번 매치업 승률 {win:.0%} → {new:.0%}: {wk[0][0].name} 영입, {wk[0][1].name} 방출이면 "
-                            f"남은 기간 +{wk[0][2]:.0f}점이에요."
-                            + (" 대신 재편안 1번은 다음 주로 밀려요." if acq.limit > 0
-                               else " 대신 재편안 1번은 하루 밀려요." if getattr(acq, "daily", 0) else ""))
+                            f"남은 기간 +{wk[0][2]:.0f}점이에요." + (" 대신 재편안 1번은 다음 주로 밀려요." if acq.limit > 0 else ""))
     return NS(slots=slots, days=len(sps), sps=sps, base=base, new=simulate(after, sps, slots, today_sp),
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
@@ -646,9 +645,6 @@ def render(league_name, standings, me, box, opp, a):
             sub += " ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요."
         quota = (f'<div class="quota{" zero" if a.left == 0 else ""}"><p class=q-main>이번 매치업 영입 <b>{a.left}회 남음</b> '
                  f'<span>({a.acq.used}회 사용 / 한도 {a.acq.limit}회)</span></p><p class=q-sub>{e(sub)}</p></div>')
-    elif getattr(a.acq, "daily", 0):  # 하루 한도만 있는 리그: 매치업 횟수 제한 없음
-        quota = (f'<div class=quota><p class=q-main>영입 한도 <b>하루 {a.acq.daily}명</b> <span>(이번 매치업 {a.acq.used}명 영입)</span></p>'
-                 f'<p class=q-sub>매치업 횟수 제한은 없어요. 재편안을 순서대로 하루 {a.acq.daily}명씩 하면 돼요(오늘 이미 영입했으면 내일부터).</p></div>')
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
 
@@ -879,13 +875,9 @@ def main():
     scores = ((box.home_score, box.away_score) if box.home_team is me else (box.away_score, box.home_score)) if opp else (0, 0)
     mine = next(t for t in st_all["teams"] if t["id"] == me.team_id)
     used = mine.get("transactionCounter", {}).get("matchupAcquisitionTotals", {}).get(str(league.currentMatchupPeriod), 0)
-    # 한도: ESPN 설정값. matchupLimitPerScoringPeriod면 matchupAcquisitionLimit은 '하루'(스코어링 기간) 한도라
-    # 매치업 횟수 제한은 없다(2026-11-07 확인: 하루 1명, 매치업 2에 7명·3에 6명 영입).
-    # 실제와 다르면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수, 매치업당 횟수)으로 덮어쓴다
-    ast = st["acquisitionSettings"]
-    daily = max(0, int(ast.get("matchupAcquisitionLimit") or 0)) if ast.get("matchupLimitPerScoringPeriod") else 0
-    acq = NS(limit=int(os.getenv("ACQ_LIMIT") or (-1 if daily else ast.get("matchupAcquisitionLimit")) or -1), used=int(used),
-             daily=daily, next_start=now.date() + timedelta(days=week_end - today_sp + 1))
+    # 한도: ACQ_LIMIT(6). 바뀌면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수)으로 덮어쓴다
+    acq = NS(limit=int(os.getenv("ACQ_LIMIT") or ACQ_LIMIT), used=int(used),
+             next_start=now.date() + timedelta(days=week_end - today_sp + 1))
     a = analyze(me.roster, opp.roster if opp else [], fas, slots, limits, counts.get("13", 0),
                 today_sp, week_end, league.finalScoringPeriod, scores, acq)
     out = HERE / "report.html"

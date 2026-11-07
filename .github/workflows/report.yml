@@ -40,7 +40,7 @@ jobs:
         env:
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           SWID: ${{ secrets.SWID }}
-          ACQ_LIMIT: ${{ vars.ACQ_LIMIT }}  # 매치업당 영입 한도. 비워 두면 ESPN 설정값(하루 한도 리그면 매치업 제한 없음)
+          ACQ_LIMIT: ${{ vars.ACQ_LIMIT }}  # 매치업당 영입 한도. 비워 두면 report.py의 ACQ_LIMIT(6)
           TZ: Asia/Seoul
       - uses: actions/upload-pages-artifact@v3
         with:
