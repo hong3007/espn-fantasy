@@ -20,7 +20,9 @@ HERE = Path(__file__).parent
 K = 10       # 올 시즌 이 경기 수만큼 뛰면 올 시즌 평균과 사전 추정(지난 시즌·ESPN 예상)을 반반 믿는다
 WINDOW = 21  # 영입 효과를 보는 기간(일). 매치업당 영입 한도가 작아 한 번 데려오면 몇 주는 쓴다고 본다
 MOVES = 3    # 재편안 교체 수(매치업당 1명이면 3주치)
-MIN_GAIN = 5  # 이 점수(WINDOW일 선발 점수)보다 적게 오르는 교체는 영입 한도를 쓸 가치가 없어 추천하지 않는다
+MIN_GAIN = 15  # 이 점수(WINDOW일 선발 점수)보다 적게 오르는 교체는 영입 한도를 쓸 가치가 없어 추천하지 않는다
+MIN_CONF = .7  # 확실도(순증가가 0보다 클 확률)가 이보다 낮은 근소한 교체도 추천하지 않는다(사용자 요청 2026-11-11)
+WAIVER_Q = .25  # ponytail: 웨이버 순위가 나보다 앞선 팀마다 같은 선수를 신청할 확률(가정값). 실제 신청 기록으로 보정하려면 여기를 고칠 것
 CV_M = 10    # 선수 개인의 경기 변동계수를 리그 공통값 쪽으로 당기는 강도(경기 수)
 ACQ_LIMIT = 6  # 매치업(주)당 영입 한도. ESPN API에는 이 값이 없어(설정의 1은 다른 뜻) 사용자 확인값을 쓴다(2026-11-08)
 STATUS = {"OUT": "OUT", "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP"}  # ESPN 판타지에서 쓰는 용어 그대로(사용자 요청)
@@ -211,8 +213,15 @@ def simulate(roster, sps, slots, today_sp):
 BASE = ("PG", "SG", "SF", "PF", "C")  # 기본 포지션(구성판 칸)
 
 
-def rank_adds(active, roster, fas, sps, slots, today_sp, limits):
+def claim_p(fa, wrank):
+    """웨이버 선수를 실제로 데려올 확률(내 웨이버 순위 wrank, 1이 가장 먼저). 웨이버가 아니면 1"""
+    return (1 - WAIVER_Q) ** (max(1, wrank) - 1) if fa.waiver else 1.0
+
+
+def rank_adds(active, roster, fas, sps, slots, today_sp, limits, min_gain=MIN_GAIN):
     """FA마다 내 선수 1명과 바꿨을 때 sps 기간 선발 점수 순증가가 가장 큰 교체 [(FA, 방출, 증가, 확실도)].
+    근소한 교체(순증가 min_gain 이하·확실도 MIN_CONF 미만)는 뺀다. 웨이버 신청은 실패해도 영입 횟수가 줄지 않으니
+    순위는 순증가 그대로 두고, 영입 확률은 안내와 대안(plan_moves)에만 쓴다.
     장기 가치가 FA보다 낮은 선수만 내보내서, 길게 봐도 손해 없는 교체만 남긴다. 확실도 = 증가가 0보다 클 확률."""
     base = simulate(active, sps, slots, today_sp)
     picks = []
@@ -224,15 +233,19 @@ def rank_adds(active, roster, fas, sps, slots, today_sp, limits):
             sim = simulate([p for p in active if p is not d] + [fa], sps, slots, today_sp)
             if best is None or sim.total - base.total > best[2]:
                 best = (fa, d, sim.total - base.total, sim)
-        if best and best[2] > MIN_GAIN:
-            picks.append(best[:3] + (prob_above(best[2], spread(base, best[3], active + [fa])),))
+        if best and best[2] > min_gain:
+            conf = prob_above(best[2], spread(base, best[3], active + [fa]))
+            if conf >= MIN_CONF:
+                picks.append(best[:3] + (conf,))
     return sorted(picks, key=lambda x: x[2], reverse=True)
 
 
-def plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, n=MOVES):
-    """순서대로 할 교체 n개. 교체할 때마다 바뀐 로스터로 다시 계산한다. (재편 후 로스터도 반환)
+def plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, n=MOVES, wrank=1):
+    """순서대로 할 교체 n개. 교체할 때마다 바뀐 로스터로 다시 계산한다. (재편 후 로스터, 웨이버 실패 시 대안도 반환)
+    대안 = 그 교체가 웨이버라 못 데려올 수 있을 때, 바로 영입할 수 있는 FA 중 가장 좋은 교체(없으면 None).
+    웨이버를 따내면 내 순위가 맨 뒤로 가므로 재편안에 웨이버는 한 명만 넣는다.
     브라우저용 PLAN_JS의 plan()과 같은 계산이다. 바꾸면 둘 다 바꿀 것."""
-    moves = []
+    moves, alts = [], []
     for i in range(n):
         if i:
             adds = rank_adds(active, roster, fas, sps, slots, today_sp, limits)
@@ -240,10 +253,11 @@ def plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, n=MOVES)
             break
         fa, d = adds[0][:2]
         moves.append(adds[0])
+        alts.append(next((t for t in adds if not t[0].waiver), None) if claim_p(fa, wrank) < 1 else None)
         active = [p for p in active if p is not d] + [fa]
         roster = [p for p in roster if p is not d] + [fa]
-        fas = [p for p in fas if p is not fa]
-    return moves, active
+        fas = [p for p in fas if p is not fa and not (fa.waiver and p.waiver)]
+    return moves, active, alts
 
 
 def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end, final_sp, scores=(0, 0), acq=None):
@@ -261,8 +275,9 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     sps = range(start, min(start + WINDOW, final_sp + 1))
     week = range(today_sp, min(week_end, final_sp) + 1)
     base = simulate(active, sps, slots, today_sp)
+    wrank = getattr(acq, "wrank", 1)  # 내 웨이버 순위(1이 가장 먼저)
     adds = rank_adds(active, roster, fas, sps, slots, today_sp, limits)
-    moves, after = plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds)
+    moves, after, alts = plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, wrank=wrank)
     # 포지션: 재편안이 인원을 늘리면 부족, 줄이면 과다였던 것. 보강 효과 = 그 포지션 FA 최선 영입의 순증가
     pos = [NS(x=x, before=[p for p in active if x in p.eligibleSlots], after=[p for p in after if x in p.eligibleSlots],
               best=next((t for t in adds if x in t[0].eligibleSlots), None)) for x in BASE if x in slots]
@@ -284,7 +299,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
         if p.lineupSlot == "IR" and p.injuryStatus not in ("OUT", "SUSPENSION"):
             acts.append(f"{p.name}: IR에서 복귀했어요. 로스터로 올려야 영입이 막히지 않아요(1명 방출 필요).")
     if win is not None and win < .5 and left != 0:  # 이번 매치업에 영입이 남아 있을 때만
-        wk = rank_adds(active, roster, [f for f in fas if not f.waiver], week, slots, today_sp, limits)[:1]
+        wk = rank_adds(active, roster, [f for f in fas if not f.waiver], week, slots, today_sp, limits, min_gain=0)[:1]
         if wk and (not moves or wk[0][0] is not moves[0][0]):
             new = prob_above(diff + wk[0][2], sd)
             if new - win >= .1:  # 승률이 10%p 이상 오를 때만 1순위를 미루라고 권한다
@@ -294,15 +309,16 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
               win=win, me_sd=spread(ZERO, me_w, active), opp_sd=spread(ZERO, opp_w, opp_active) if opp_w else 0,
-              active=active, acq=acq, left=left, week_of=week_of)
+              active=active, acq=acq, left=left, week_of=week_of, alts=alts, wrank=wrank)
 
 
 def plan_data(a, info=lambda p: ""):
     """브라우저 재편안 계산(PLAN_JS)에 넘길 숫자. 이름·info는 HTML 이스케이프된 상태로 넣는다"""
     pack = lambda p: {"id": str(p.playerId), "n": html.escape(p.name), "pos": p.position, "info": info(p),
                       "elig": [s for s in dict.fromkeys(p.eligibleSlots) if s in a.slots], "ros": ros(p), "sd": p.sd, "se": p.se,
+                      "p": claim_p(p, a.wrank), "w": bool(p.waiver),
                       "val": [game_value(p, sp, a.today_sp) for sp in a.sps]}
-    return {"slots": list(a.slots), "days": len(a.sps), "n": MOVES, "min": MIN_GAIN, "limits": a.limits, "my": [pack(p) for p in a.active],
+    return {"slots": list(a.slots), "days": len(a.sps), "n": MOVES, "min": MIN_GAIN, "minc": MIN_CONF, "wr": a.wrank, "limits": a.limits, "my": [pack(p) for p in a.active],
             "ir": [{"id": str(p.playerId), "pos": p.position} for p in a.roster if p.lineupSlot == "IR"],
             "fa": [pack(p) for p in a.cands]}
 
@@ -367,7 +383,7 @@ function spread(b, a, P) {
   for (const p of P) { const d = (a.st[p.id] || 0) - (b.st[p.id] || 0); v += Math.abs(d) * p.sd ** 2 + (d * p.se) ** 2; }
   return Math.sqrt(v);
 }
-function rank(A, R, F) {  // FA마다 가장 좋은 방출 상대와 순증가, 순증가 큰 순(확실도는 plan에서 고른 교체만)
+function rank(A, R, F) {  // FA마다 가장 좋은 방출 상대와 순증가, 순증가 큰 순(확실도는 plan에서)
   const bt = total(A), out = [];
   for (const fa of F.slice(0, 30)) {
     let best = null;
@@ -384,33 +400,42 @@ function rank(A, R, F) {  // FA마다 가장 좋은 방출 상대와 순증가, 
 const byId = Object.fromEntries(D.my.concat(D.fa).map(p => [p.id, p]));
 function plan(ex) {
   if (!ex.size && D.init)  // 처음 화면은 리포트를 만들 때(파이썬) 계산해 둔 재편안 → 폰에서 열자마자 보인다
-    return { moves: D.init.moves.map(([f, d, g, c]) => ({ fa: byId[f], d: byId[d], g, c })), base: D.init.base, after: D.init.after };
+    return { moves: D.init.moves.map(([f, d, g, c, alt]) => ({ fa: byId[f], d: byId[d], g, c,
+      alt: alt && { fa: byId[alt[0]], d: byId[alt[1]], g: alt[2] } })), base: D.init.base, after: D.init.after };
   let A = D.my.slice(), R = D.roster.slice(), F = D.fa.filter(f => !ex.has(f.id));
   const moves = [];
   for (let i = 0; i < D.n; i++) {
-    const r = rank(A, R, F);
-    if (!r.length) break;
-    const m = r[0], after = A.filter(p => p !== m.d).concat([m.fa]);
-    m.c = above(m.g, spread(sim(A), sim(after), A.concat([m.fa])));  // 선발 횟수 변화로 확실도(고른 교체만)
+    const sa = sim(A);
+    let m = null;  // 확실도가 D.minc 이상인 첫 교체. 웨이버(못 데려올 수 있음)면 바로 영입 가능한 대안도 찾는다
+    for (const x of rank(A, R, F)) {
+      x.c = above(x.g, spread(sa, sim(A.filter(p => p !== x.d).concat([x.fa])), A.concat([x.fa])));  // 선발 횟수 변화로 확실도
+      if (x.c < D.minc) continue;
+      if (!m) { m = x; if (x.fa.p === 1) break; }
+      else if (!x.fa.w) { m.alt = x; break; }
+    }
+    if (!m) break;
+    const after = A.filter(p => p !== m.d).concat([m.fa]);
     moves.push(m);
-    A = after; R = R.filter(p => p !== m.d).concat([m.fa]); F = F.filter(p => p !== m.fa);
+    A = after; R = R.filter(p => p !== m.d).concat([m.fa]); F = F.filter(p => p !== m.fa && !(m.fa.w && p.w));  // 웨이버는 재편안에 한 명만
   }
   return { moves, base: total(D.my), after: total(A) };
 }
 if (typeof document !== "undefined") {
   const ex = new Set(), $ = s => document.querySelector(s);
   const card = (l, p, c) => `<div class=${c}><small>${l}</small><b>${p.n}</b><small>${p.info}</small></div>`;
+  const wv = m => !m.fa.w ? "" : "<small class=wv>" + (m.fa.p < 1 ? `내 웨이버 순위 ${D.wr}번째라 영입 확률 약 ${Math.round(m.fa.p * 100)}%(가정). 실패하면 ` +
+    (m.alt ? `${m.alt.d.n} 방출하고 ${m.alt.fa.n} 영입(+${m.alt.g.toFixed(0)}점)` : "그대로 유지") : "내 웨이버 순위 1번째라 신청하면 데려올 수 있어요") + "</small>";
   const draw = () => {
     const P = plan(ex), M = P.moves;
     $("#pills").innerHTML = M.map((m, i) => `<li class=pill><span>${i + 1}</span>${m.fa.n}` +
       `<button type=button data-id="${m.fa.id}" aria-label="${m.fa.n} 빼기">×</button></li>`).join("");
     $("#excluded").innerHTML = ex.size ? "뺀 선수: " + D.fa.filter(f => ex.has(f.id)).map(f => f.n).join(", ") : "";
-    $("#plan").innerHTML = !M.length ? (ex.size ? "<p class=lead>뺀 선수 말고는 남은 후보가 없어요. 새로고침하면 처음으로 돌아가요.</p>" : "<p class=lead>지금 로스터보다 나은 FA가 없어요. 이대로 유지하세요.</p>") :
-      `<p class=now>${D.now} 할 일: <b>${M[0].d.n}</b> 방출하고 <b class=hl>${M[0].fa.n}</b> 영입</p>` +
-      `<p class=lead>아래 순서대로 바꾸면 ${D.from}앞으로 ${D.days}일 선발 점수가 <b>${P.base.toFixed(0)}</b>점에서 <b>${P.after.toFixed(0)}</b>점으로 늘어요.</p>` +
+    $("#plan").innerHTML = !M.length ? (ex.size ? "<p class=lead>뺀 선수 말고는 남은 후보가 없어요. 새로고침하면 처음으로 돌아가요.</p>" : "<p class=lead>영입 한도를 쓸 만큼 확실히 나은 FA가 없어요. 이대로 유지하세요.</p>") :
+      `<p class=now>${D.now} 할 일: <b>${M[0].d.n}</b> 방출하고 <b class=hl>${M[0].fa.n}</b> ${M[0].fa.w ? "웨이버 신청" : "영입"}</p>` +
+      `<p class=lead>아래 순서대로 바꾸면${M.some(m => m.fa.w) ? "(웨이버 성공 기준)" : ""} ${D.from}앞으로 ${D.days}일 선발 점수가 <b>${P.base.toFixed(0)}</b>점에서 <b>${P.after.toFixed(0)}</b>점으로 늘어요.</p>` +
       "<ol class=moves>" + M.map((m, i) => `<li><span class=when>${D.when[i]}</span><div class=pair>${card("방출", m.d, "out")}` +
         `<span class=arrow>→</span>${card("영입", m.fa, "in")}</div><span class=gain>+${m.g.toFixed(0)}` +
-        `<small>확실 ${Math.round(m.c * 100)}%${m.c < .7 ? " (근소)" : ""}</small></span></li>`).join("") + "</ol>";
+        `<small>확실 ${Math.round(m.c * 100)}%</small></span>${wv(m)}</li>`).join("") + "</ol>";
   };
   let busy = false;
   $("#pills").addEventListener("click", e => {
@@ -526,6 +551,7 @@ border:1px solid var(--line);border-left:4px solid var(--ball);border-radius:8px
 .arrow{font:700 1.3rem var(--num);color:var(--muted)}
 .gain{font:700 1.5rem var(--num);color:var(--good);text-align:right}
 .moves .gain small{display:block;font:400 .72rem var(--text);color:var(--muted);text-align:right}
+.wv{grid-column:1/-1;font-size:.8rem}
 .quota{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--good);border-radius:8px;padding:10px 14px;margin:0 0 12px}
 .quota.zero{border-left-color:var(--bad)}
 .q-main{margin:0;font-weight:600}
@@ -631,7 +657,8 @@ def render(league_name, standings, me, box, opp, a):
     data["now"] = data["when"][0] if a.acq.limit > 0 else "지금"
     n0 = a.acq.next_start
     data["from"] = f"다음 매치업({n0.month}/{n0.day})부터 " if a.left == 0 and n0 else ""
-    data["init"] = {"moves": [[str(f.playerId), str(d.playerId), g, c] for f, d, g, c in a.moves],  # 첫 화면은 계산 없이
+    mv = lambda t: [str(t[0].playerId), str(t[1].playerId), t[2], t[3]]
+    data["init"] = {"moves": [mv(m) + [alt and mv(alt)] for m, alt in zip(a.moves, a.alts)],  # 첫 화면은 계산 없이
                     "base": a.base.total, "after": a.new.total}
     script = "const D=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";" + PLAN_JS  # <!--·</script 조합이 스크립트를 끊지 않게
     note = ""
@@ -705,7 +732,7 @@ def render(league_name, standings, me, box, opp, a):
         f"<li class=row>{who(f)}<p class=n>{f.est:.1f}<small>±{f.se:.0f}</small></p><p class=n>{games(f, a.sps)}</p>"
         f"<p class='n gain'>+{g:.0f}<small>{surname(d)} 대신<br>확실 {c:.0%}</small></p></li>" for f, d, g, c in a.adds[:8])
     fa_head = f"<li class='row head'><span>선수</span><span>경기당 추정</span><span>{a.days}일 경기</span><span>순증가</span></li>"
-    fas = f"<ul class=rows>{fa_head}{fa_rows}</ul>" if a.adds else "<p>지금 로스터보다 나은 FA가 없어요.</p>"
+    fas = f"<ul class=rows>{fa_head}{fa_rows}</ul>" if a.adds else "<p>영입 한도를 쓸 만큼 확실히 나은 FA가 없어요.</p>"
 
     std = "".join(
         f"<li class='row{' me' if t is me else ''}'><span>{i}</span><span>{e(t.team_name)}</span>"
@@ -753,7 +780,8 @@ def render(league_name, standings, me, box, opp, a):
 <li>출전율: ESPN 예상 출전 경기 ÷ 82(정규시즌 경기 수). ESPN 예상이 없으면 작년 출전 경기로 계산해요.</li>
 <li>선발 점수: 날마다 실제 NBA 일정에서 경기가 있는 선수를 선발 {len(a.slots)}자리에 가장 높게 배치한 합이에요. OUT 선수는 복귀 예정일까지 0점.</li>
 <li>순증가: 그 선수를 영입하고 방출 대상을 내보냈을 때 {a.days}일 선발 점수 차이. 방출 대상은 장기 가치(경기당 추정 × 출전율)가 더 낮은 선수만 골라요.</li>
-<li>확실도: 교체로 선발 경기가 늘고 주는 선수들의 경기별 점수 흔들림(작년·올해 경기 기록)과 경기당 추정의 오차(± 숫자)로, 순증가가 0보다 클 확률을 계산해요. 70% 미만이면 근소.</li>
+<li>확실도: 교체로 선발 경기가 늘고 주는 선수들의 경기별 점수 흔들림(작년·올해 경기 기록)과 경기당 추정의 오차(± 숫자)로, 순증가가 0보다 클 확률을 계산해요. 순증가 {MIN_GAIN}점 이하이거나 확실도 {MIN_CONF:.0%} 미만인 근소한 교체는 영입 한도만 쓰게 되니 추천하지 않아요.</li>
+<li>웨이버: 내 웨이버 순위는 {a.wrank}번째예요. 앞선 팀마다 {WAIVER_Q:.0%} 확률로 같은 선수를 신청한다고 가정해 영입 확률을 계산해요(가정값). 신청이 실패해도 영입 횟수는 줄지 않으니 순위는 순증가대로 두고, 실패했을 때 할 대안을 함께 보여 줘요. 웨이버를 따내면 순위가 맨 뒤로 가서 재편안에 웨이버는 한 명만 넣어요.</li>
 <li>승률: 현재 점수 + 남은 예상과, 남은 선발 경기의 흔들림으로 계산해요. 80% 범위는 예상 최종이 열 번 중 여덟 번 들어가는 구간이에요.</li>
 </ul></main></body></html>"""
 
@@ -876,7 +904,7 @@ def main():
     mine = next(t for t in st_all["teams"] if t["id"] == me.team_id)
     used = mine.get("transactionCounter", {}).get("matchupAcquisitionTotals", {}).get(str(league.currentMatchupPeriod), 0)
     # 한도: ACQ_LIMIT(6). 바뀌면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수)으로 덮어쓴다
-    acq = NS(limit=int(os.getenv("ACQ_LIMIT") or ACQ_LIMIT), used=int(used),
+    acq = NS(limit=int(os.getenv("ACQ_LIMIT") or ACQ_LIMIT), used=int(used), wrank=int(mine.get("waiverRank") or 1),
              next_start=now.date() + timedelta(days=week_end - today_sp + 1))
     a = analyze(me.roster, opp.roster if opp else [], fas, slots, limits, counts.get("13", 0),
                 today_sp, week_end, league.finalScoringPeriod, scores, acq)

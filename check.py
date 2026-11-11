@@ -100,6 +100,26 @@ assert (a2.me_w.total, a2.opp_w.total) == (110, 300)
 # 예상 최종 260 대 300 → 40점 차라 승률 낮음. C3↔W(바로 영입)는 1~3일 +2+22+22=46점이라 승률이 크게 오름
 assert .1 < a2.win < .3, a2.win
 assert a2.moves[0][0] is c2w and re.search(r"승률 \d+% → \d+%: C3 영입", t2) and "IRback: IR에서 복귀" in t2, t2
+# 웨이버 순위 6번째면 영입 확률 0.75^5 ≈ 24%. 실패해도 영입 횟수는 안 줄어 순위는 순증가 그대로, 대신 실패 시 대안을 붙인다
+assert report.claim_p(c2w, 1) == 1 and report.claim_p(c3, 6) == 1 and round(report.claim_p(c2w, 6), 3) == .237 and report.claim_p(c2w, 0) == 1
+# 웨이버 C9(+520)가 1순위 + 대안 C3(바로 영입). 웨이버를 따내면 순위가 맨 뒤로 가니 다음 웨이버 PGw(+180)는 재편안에 넣지 않는다
+c9w, pgw = P("C9", 90, ["C"], sps, waiver=True), P("PGw", 60, ["PG", "G"], sps, waiver=True)
+aw = report.analyze(roster, [], [c9w, pgw, c3], slots, {}, 1, 1, 3, 6, acq=NS(limit=6, used=0, wrank=6, next_start=date(2026, 11, 2)))
+assert [f.name for f, *_ in aw.moves] == ["C9"] and aw.alts[0][0] is c3 and aw.wrank == 6, aw.moves
+assert [f.name for f, *_ in aw.adds][:2] == ["C9", "PGw"], "영입 후보 순위는 순증가 그대로"
+pw = report.render("우리리그", [me_t, other], me_t, None, None, aw)
+assert '"wr": 6' in pw and "내 웨이버 순위는 6번째" in pw and '"w": true' in pw and '["C3", "W"' in pw, "init에 대안 포함"
+# 순증가가 커도(+18 > MIN_GAIN) 확실도가 MIN_CONF 미만이면 제외
+r1, close = [g1, P("C1", 100, ["C"], sps), w], P("Close", 103, ["C"], sps)
+assert report.simulate([g1, close, w], sps, slots, 1).total - report.simulate(r1, sps, slots, 1).total == 18 > report.MIN_GAIN
+assert report.rank_adds(r1, r1, [close], sps, slots, 1, {}) == [], "확실도 MIN_CONF 미만은 순증가가 커도 제외"
+ac = report.analyze(r1, [], [close], slots, {}, 1, 1, 3, 6)
+# 근소한 교체는 추천하지 않는다: 순증가가 MIN_GAIN 이하이거나 확실도가 MIN_CONF 미만
+tiny = P("Tiny", 21, ["C"], [1])  # C1(20) 대신 1일 +1점
+assert report.rank_adds(roster, roster, [tiny], sps, slots, 1, {}) == []
+shaky = P("Shaky", 26, ["PG", "G"], sps)  # W(10) 자리는 벤치라 선발 점수 변화 없음 → 순증가 0
+assert report.rank_adds(roster, roster, [shaky], sps, slots, 1, {}) == []
+assert all(c >= report.MIN_CONF and g > report.MIN_GAIN for *_, g, c in adds)
 a3 = report.analyze(roster + [ir], other.roster, [c2w, c3], slots, {}, 1, 1, 3, 6, scores=(0, 0))
 assert a3.win < .01 and not any("승률" in x for x in a3.acts), "190점 차는 46점으로 승률이 거의 안 오르니 1순위를 미루라고 하면 안 됨"
 
@@ -108,6 +128,13 @@ node = shutil.which("node")
 if node:
     js = ("const D=" + json.dumps(report.plan_data(a)) + ";" + report.PLAN_JS +
           "console.log(JSON.stringify([[], ['C2']].map(x => plan(new Set(x)).moves.map(m => [m.fa.n, m.d.n, m.g, m.c]))))")
+    # 웨이버 대안도 JS와 파이썬이 같은지(× 재계산 경로: 없는 id를 빼서 init을 건너뜀)
+    jw = ("const D=" + json.dumps(report.plan_data(aw)) + ";" + report.PLAN_JS +
+          "console.log(JSON.stringify(plan(new Set(['none'])).moves.map(m => [m.fa.n, m.d.n, m.alt ? m.alt.fa.n : null, m.alt ? m.alt.g : null])))")
+    gw = json.loads(subprocess.run([node, "-e", jw], capture_output=True, text=True, check=True).stdout)
+    assert gw == [[f.name, d.name, alt and alt[0].name, alt and alt[2]] for (f, d, *_), alt in zip(aw.moves, aw.alts)], gw
+    jc = "const D=" + json.dumps(report.plan_data(ac)) + ";" + report.PLAN_JS + "console.log(plan(new Set(['none'])).moves.length)"
+    assert subprocess.run([node, "-e", jc], capture_output=True, text=True, check=True).stdout.strip() == "0", "JS도 확실도 미달은 제외"
     got = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
     b = report.analyze(roster + [out], [], [hurt, c4, bad], slots, {}, 1, 1, 3, 6)  # C2 없이 파이썬으로
     for js_moves, py_moves in zip(got, (a.moves, b.moves)):
