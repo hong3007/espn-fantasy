@@ -23,7 +23,10 @@ assert report.find_my_team([other, me_t], "{abc-123}") is me_t
 raw = {"player": {"stats": [{"id": "002026", "appliedAverage": 40.04, "stats": {"42": 50.0}}]}}
 assert report.last_season(raw, 2026) == (40.0, 50) and report.last_season({}, 2026) == (0.0, 0)
 assert report.estimate(60, 0, 40, 50, 50) == 45
-assert report.estimate(60, report.K, 40, 50, 50) == 52.5
+assert report.estimate(60, 4, 40, 50, 50) == (4 * 60 + report.K * 45) / (4 + report.K), "5경기 미만은 그대로 K 보정"
+# 작년 34점 → 올해 10경기 18.8점(z≈4)은 역할 변화로 보고 작년을 거의 버린다. 차이가 작으면(z≈0.3) 평소 보정과 거의 같다
+assert 20 < report.estimate(18.8, 10, 34, 82, 34.3) < 20.5
+assert abs(report.estimate(33, 10, 34, 82, 34) - (330 + report.K * 34) / (10 + report.K)) < .1
 assert report.estimate(60, 0, 40, 5, 0) == 60, "지난 시즌 10경기 미만·예상 없음이면 올 시즌 평균 그대로"
 # 최근 15일 경기는 2배 가중: 시즌 10경기 평균 30, 최근 5경기 평균 42 → (300 + 210) / 15 = 34 → K 보정
 assert report.estimate(30, 10, 0, 0, 0, (42, 5)) == 34
@@ -35,7 +38,7 @@ T = date(2026, 10, 29)
 R = lambda inj, ret, sched=None: NS(stats={}, avg_points=0, projected_avg_points=0, injuryStatus=inj,
                                     expected_return_date=ret, schedule=sched or {})
 assert [report.prepare(R("OUT", r), {}, 2027, 10, T).back_sp for r in (date(2026, 11, 3), None, date(2026, 10, 1))] == [15, 17, 11]
-assert report.prepare(R("ACTIVE", None), raw, 2027, 10, T).dur == 50 / 82
+assert report.prepare(R("ACTIVE", None), raw, 2027, 10, T).dur == 1 - (32 / 82) / 2
 assert report.prepare(R([], None), {}, 2027, 10, T).injuryStatus is None
 sched = {"9": {"date": datetime(2000, 1, 1)}, "10": {"date": datetime(2999, 1, 1)}, "11": {}}
 assert set(report.prepare(R("ACTIVE", None, sched), {}, 2027, 10, T).schedule) == {"10", "11"}
@@ -108,6 +111,7 @@ aw = report.analyze(roster, [], [c9w, pgw, c3], slots, {}, 1, 1, 3, 6, acq=NS(li
 assert [f.name for f, *_ in aw.moves] == ["C9"] and aw.alts[0][0] is c3 and aw.wrank == 6, aw.moves
 assert [f.name for f, *_ in aw.adds][:2] == ["C9", "PGw"], "영입 후보 순위는 순증가 그대로"
 pw = report.render("우리리그", [me_t, other], me_t, None, None, aw)
+assert "<span>웨이버 순위 6번째</span>" in pw, "맨 위에 내 웨이버 순위"
 assert '"wr": 6' in pw and "내 웨이버 순위는 6번째" in pw and '"w": true' in pw and '["C3", "W"' in pw, "init에 대안 포함"
 # 순증가가 커도(+18 > MIN_GAIN) 확실도가 MIN_CONF 미만이면 제외
 r1, close = [g1, P("C1", 100, ["C"], sps), w], P("Close", 103, ["C"], sps)

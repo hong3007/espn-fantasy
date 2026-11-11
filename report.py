@@ -17,7 +17,10 @@ from types import SimpleNamespace as NS
 from urllib.parse import quote
 
 HERE = Path(__file__).parent
-K = 10       # 올 시즌 이 경기 수만큼 뛰면 올 시즌 평균과 사전 추정(지난 시즌·ESPN 예상)을 반반 믿는다
+# 올 시즌 이 경기 수만큼 뛰면 올 시즌 평균과 사전 추정(지난 시즌·ESPN 예상)을 반반 믿는다.
+# 이론값 K = (경기별 흔들림 ÷ 시즌 간 실력 변화)² ≈ (0.35 ÷ 0.16)² ≈ 5. 10이면 올 시즌 10경기를 뛴 뒤에도 작년을 절반이나 믿어
+# 부진한 선수(M. Bridges 17점 → 26점 추정)를 과대평가했다(2026-11-11 사용자 지적으로 낮춤)
+K = 5
 WINDOW = 21  # 영입 효과를 보는 기간(일). 매치업당 영입 한도가 작아 한 번 데려오면 몇 주는 쓴다고 본다
 MOVES = 3    # 재편안 교체 수(매치업당 1명이면 3주치)
 MIN_GAIN = 15  # 이 점수(WINDOW일 선발 점수)보다 적게 오르는 교체는 영입 한도를 쓸 가치가 없어 추천하지 않는다
@@ -107,7 +110,15 @@ def estimate(cur, gp, last_avg, last_gp, proj, recent=(0.0, 0)):
         cur = (gp * cur + r_n * r_avg) / (gp + r_n)
     prior = [v for v, ok in ((last_avg, last_gp >= 10), (proj, proj > 0)) if ok]
     prior = sum(prior) / len(prior) if prior else cur
-    return (gp * cur + K * prior) / (gp + K)
+    k = K
+    if gp >= 5 and prior > 0:
+        # 올 시즌이 사전 추정과 우연으로 보기 힘들 만큼 다르면(역할이 바뀐 것) 사전 추정을 덜 믿는다.
+        # z = 차이 ÷ 평균의 표준오차(경기별 변동계수 0.35 가정). z=2면 K 절반, z=4면 1/5.
+        # 예: M. Bridges 작년 34점 → 올해 10경기 19점은 z≈4라 작년 기록을 거의 버린다(사용자 지적 2026-11-11)
+        # ponytail: 5경기 미만은 부상 교체 같은 한두 경기에 흔들려서 적용하지 않는다
+        z = (cur - prior) / (.35 * prior / gp ** .5)
+        k = K / (1 + (z / 2) ** 2)
+    return (gp * cur + k * prior) / (gp + k)
 
 
 def prepare(p, raw, year, today_sp, today):
@@ -121,7 +132,9 @@ def prepare(p, raw, year, today_sp, today):
     p.est = estimate(p.avg_points, p.gp, p.last_avg, p.last_gp, p.projected_avg_points, p.recent)
     # ESPN 예상 출전 경기는 부상 이력을 이미 반영한다. 지난 시즌 출전만 쓰면 한 번 크게 다친 선수가 반값이 된다
     gp = proj.get("GP") or p.last_gp
-    p.dur = min(1, max(.4, gp / 82)) if gp else .85  # ponytail: 자료 없는 신인은 85%로 가정
+    # ponytail: 시즌 전체 결장률의 절반만 반영. 시즌 예상 출전은 장기 부상 위험까지 담는데, 지금 뛰는 선수가 앞으로 3주 안에
+    # 빠질 확률은 그보다 낮다(그대로 쓰면 K. George 0.80처럼 건강한 선수가 20% 깎였다). 자료 없는 신인은 90%로 가정
+    p.dur = min(1, max(.7, 1 - (1 - gp / 82) / 2)) if gp else .9
     p.waiver = raw.get("status") == "WAIVERS"
     p.injuryStatus = p.injuryStatus or None
     now = datetime.now()  # 이미 시작한 경기는 현재 점수에 들어가 있으니 남은 일정에서 뺀다
@@ -753,7 +766,7 @@ def render(league_name, standings, me, box, opp, a):
 <link rel=manifest href="manifest.webmanifest"><meta name=theme-color content="#f07a1a">
 <style>{CSS}</style></head><body><main>
 <header class=top><img class=logo src="{svg}" alt="">
-<div><h1>{e(me.team_name)}</h1><p class=meta><span>{e(league_name)}</span><span>{rank}위</span><span>{me.wins}승 {me.losses}패</span></p></div>
+<div><h1>{e(me.team_name)}</h1><p class=meta><span>{e(league_name)}</span><span>{rank}위</span><span>{me.wins}승 {me.losses}패</span><span>웨이버 순위 {a.wrank}번째</span></p></div>
 <p class=date>최근 업데이트 <b>{now.month}월 {now.day}일 {now.hour:02d}:{now.minute:02d}</b> <span id=ago></span> <button type=button id=upd hidden>새 리포트 확인</button></p></header>
 <p id=updmsg class=note role=status></p>
 
@@ -776,8 +789,8 @@ def render(league_name, standings, me, box, opp, a):
 <h2>리그 순위</h2><ul class="rows std">{std}</ul>
 
 <h2>계산 방법</h2><ul class=method>
-<li>경기당 추정: 올 시즌 평균을 작년 평균과 ESPN 예상 쪽으로 보정해요. 올 시즌 {K}경기를 뛰면 반반이라, 시즌 초 몇 경기로 튀는 숫자를 줄여 줘요.</li>
-<li>출전율: ESPN 예상 출전 경기 ÷ 82(정규시즌 경기 수). ESPN 예상이 없으면 작년 출전 경기로 계산해요.</li>
+<li>경기당 추정: 올 시즌 평균을 작년 평균과 ESPN 예상 쪽으로 보정해요. 올 시즌 {K}경기를 뛰면 반반이라, 시즌 초 몇 경기로 튀는 숫자를 줄여 줘요. 다만 5경기 넘게 뛰었는데 작년과 차이가 우연으로 보기 힘들 만큼 크면(역할이 바뀐 선수) 작년 기록을 거의 안 믿어요.</li>
+<li>출전율: ESPN 예상 출전 경기 ÷ 82(정규시즌 경기 수)에서 빠지는 비율의 절반만 반영해요(예: 66경기 예상이면 90%). 지금 뛰는 선수가 앞으로 3주 안에 빠질 가능성은 시즌 전체보다 낮아서예요. ESPN 예상이 없으면 작년 출전 경기로 계산해요.</li>
 <li>선발 점수: 날마다 실제 NBA 일정에서 경기가 있는 선수를 선발 {len(a.slots)}자리에 가장 높게 배치한 합이에요. OUT 선수는 복귀 예정일까지 0점.</li>
 <li>순증가: 그 선수를 영입하고 방출 대상을 내보냈을 때 {a.days}일 선발 점수 차이. 방출 대상은 장기 가치(경기당 추정 × 출전율)가 더 낮은 선수만 골라요.</li>
 <li>확실도: 교체로 선발 경기가 늘고 주는 선수들의 경기별 점수 흔들림(작년·올해 경기 기록)과 경기당 추정의 오차(± 숫자)로, 순증가가 0보다 클 확률을 계산해요. 순증가 {MIN_GAIN}점 이하이거나 확실도 {MIN_CONF:.0%} 미만인 근소한 교체는 영입 한도만 쓰게 되니 추천하지 않아요.</li>
