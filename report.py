@@ -680,7 +680,7 @@ def render(league_name, standings, me, box, opp, a):
         sub = (f"다 썼어요. 재편안은 다음 매치업({n0.month}/{n0.day} {'월화수목금토일'[n0.weekday()]})부터예요." if a.left == 0 and n0
                else "다 썼어요. 재편안은 다음 매치업부터예요." if a.left == 0
                else f"재편안은 매치업마다 최대 {a.acq.limit}명씩 나눴어요.")
-        sub += " 매치업(월~일)마다 초기화돼요."
+        sub += " ESPN은 미국 동부시간 기준이라, 한국시간으로는 월요일 오후에 초기화돼요."
         if a.acq.used > a.acq.limit:
             sub += " ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요."
         quota = (f'<div class="quota{" zero" if a.left == 0 else ""}"><p class=q-main>이번 매치업 영입 <b>{a.left}회 남음</b> '
