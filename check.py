@@ -92,6 +92,41 @@ assert [(r.x, len(r.before), len(r.after), r.best and r.best[0].name) for r in a
 assert round(a.idle, 2) == round((2 * 6 - 7) / 6, 2), "선발 2자리×6일 중 7번만 채움(G1 6 + C1 1)"
 assert any(x.startswith("Out: OUT 상태예요") for x in a.acts), a.acts
 
+# 이번 주 빈자리 채우기: C1은 1일만 경기라 C가 2~6일 빈다. 영입 1번이면 C1 자리에 C2를 1일에(1일 20→25, 2~6일 +25씩 = +130. W 자리면 +125)
+s1 = report.stream_plan(roster, roster, [c2, bad], sps, slots, 1, {}, 1)
+assert [(d, o.name, f.name, g) for d, o, f, g, _ in s1.moves] == [(1, "C1", "C2", 6)] and (s1.base, s1.total) == (200, 330), s1
+# 하루만 뛰는 FA 둘(2일 X, 4일 Y)은 같은 자리를 돌려 쓴다: 2일 C1→X, 4일 X→Y(이득이 같으면 늦은 날). 웨이버 선수는 제외, 영입 0번이면 계획 없음
+x, y = P("X", 40, ["C"], [2]), P("Y", 50, ["C"], [4])
+s2 = report.stream_plan(roster, roster, [x, y, P("Zw", 99, ["C"], sps, waiver=True)], sps, slots, 1, {}, 6)
+assert [(d, o.name, f.name, g) for d, o, f, g, _ in s2.moves] == [(2, "C1", "X", 1), (4, "X", "Y", 1)] and s2.total - s2.base == 90, s2
+assert report.stream_plan(roster, roster, [c2], sps, slots, 1, {}, 0).moves == []
+# 가장 약한 선수도 FA보다 좋으면 그 자리는 쓰지 않는다(좋은 선수 보호). force면 가장 약한 1명 자리만 써 본다
+weak = P("Weak", 9, ["C"], sps)  # W(10)·C1(20)보다 가치가 낮은 FA뿐
+assert report.stream_plan(roster, roster, [weak], sps, slots, 1, {}, 3).moves == []
+assert [(o.name, f.name) for _, o, f, *_ in report.stream_plan(roster, roster, [weak], sps, slots, 1, {}, 3, force=True).moves] == [("W", "Weak")]
+aweak = report.analyze(roster, [], [weak], slots, {}, 1, 1, 3, 6)
+assert not aweak.stream.moves and aweak.stream.alt.moves
+pweak = report.render("우리리그", [me_t, other], me_t, None, None, aweak)
+assert "내보낼 만한 선수가 없어요. 가장 약한 W도" in pweak and "그 선수를 잃어요" in pweak
+assert report.stream_plan(roster, roster, [c2], sps, slots, 1, {"C": 0}, 3).moves == [], "포지션 인원 제한을 넘는 영입은 하지 않는다"
+assert report.stream_plan(roster, roster, [P("Small", 21, ["C"], [1])], sps, slots, 1, {}, 3).moves == [], "MIN_STREAM 이하(+1)는 영입하지 않는다"
+assert sum(m[4] for m in s2.moves) == s2.total - s2.base, "줄마다 오른 점수의 합 = 전체 증가"
+# 처음 내보낸 선수보다 장기 가치가 낮은 FA로는 바꾸지 않는다: Low(15)는 C1(20) 자리엔 못 들어가고 W(10) 자리에만
+low15 = P("Low", 15, ["C", "PG", "G"], [2, 3, 4, 5, 6])
+s3 = report.stream_plan(roster, roster, [P("Strong", 30, ["C"], [1]), low15], sps, slots, 1, {}, 6)
+assert any(m[2] is low15 for m in s3.moves) and not any(m[2] is low15 and m[1] is c1 for m in s3.moves), [(o.name, f.name) for _, o, f, *_ in s3.moves]
+# 포지션 인원 제한은 그 선수가 내 팀에 있는 모든 날 기준(C 제한 1: 3일부터 Y(C)가 있으면 1일에 X(C)를 들여 6일까지 두면 안 됨)
+lw = range(1, 7)
+la, w1, w2 = P("A", 30, ["PG", "G"], lw), P("W1", 5, ["PG", "G"], []), P("W2", 6, ["PG", "G"], [])
+lx, ly = P("X", 20, ["C", "UT"], lw), P("Y", 40, ["C", "UT"], [3, 4, 5, 6])
+sl = report.stream_plan([la, w1, w2], [la, w1, w2], [lx, ly], lw, ("PG", "C", "UT"), 1, {"C": 1}, 6)
+team_c = lambda t: sum(f.position == "C" and any(m[2] is f and m[0] <= t for m in sl.moves)
+                       and not any(m[1] is f and m[0] <= t for m in sl.moves) for f in (lx, ly))
+assert all(team_c(t) <= 1 for t in lw), [(d, o.name, f.name) for d, o, f, *_ in sl.moves]
+# 재편안의 이번 주 교체와 빈자리 채우기가 같은 영입 횟수를 따로 쓰지 않는다: 남은 6번 중 재편안 이번 주 2번을 빼고 4번만, 재편안 영입 선수는 자리로 안 씀
+ab = report.analyze(roster + [out], [], [c2, hurt, c4, bad], slots, {}, 1, 1, 3, 6, acq=NS(limit=6, used=0, next_start=date(2026, 11, 2)))
+assert ab.stream.now == 2 and len(ab.stream.moves) <= 4 and all(m[1] not in (c2, c4) and m[2] not in (c2, c4) for m in ab.stream.moves)
+
 # 상대가 있고 지는 중: 이번 매치업용 추천은 웨이버 제외, IR 복귀 안내
 ir = P("IRback", 25, ["PG"], sps, slot="IR")
 other.roster = [P("O1", 50, ["PG"], sps), P("O2", 50, ["C"], sps)]
@@ -170,6 +205,7 @@ box = NS(home_team=other, away_team=me_t, home_score=111.0, away_score=99.0)
 page = report.render("우리리그", [me_t, other], me_t, box, other, a2)
 assert "<p class=final>209</p>" in page and "<p class=final>411</p>" in page, "현재 점수 + 남은 예상"
 assert "방출 → C2" in page and "id=pills" in page and "내 승률" in page and "80% 범위" in page
+assert "이번 매치업 빈자리 채우기</h2>" in page and page.index("이번 매치업 빈자리 채우기</h2>") < page.index("id=pills")
 assert page.count("<script>") == page.count("</script>") == 2, "데이터 안의 </ 가 스크립트를 끊으면 안 됨"
 assert re.search(r'name=generated content="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"', page) and "id=upd" in page and "id=updmsg" in page, "새 리포트 확인 버튼"
 bye = report.render("우리리그", [me_t, other], me_t, None, None, a)

@@ -28,6 +28,8 @@ MIN_CONF = .7  # 확실도(순증가가 0보다 클 확률)가 이보다 낮은 
 WAIVER_Q = .25  # ponytail: 웨이버 순위가 나보다 앞선 팀마다 같은 선수를 신청할 확률(가정값). 실제 신청 기록으로 보정하려면 여기를 고칠 것
 CV_M = 10    # 선수 개인의 경기 변동계수를 리그 공통값 쪽으로 당기는 강도(경기 수)
 ACQ_LIMIT = 6  # 매치업(주)당 영입 한도. ESPN API에는 이 값이 없어(설정의 1은 다른 뜻) 사용자 확인값을 쓴다(2026-11-08)
+STREAM_SPOTS = 2  # 이번 주 빈자리 채우기에 쓸 자리 수: 장기 가치가 가장 낮은 선수 2명의 자리만 돌려 쓴다
+MIN_STREAM = 8    # 이번 주 선발 점수가 이보다 적게 오르는 영입은 하지 않는다(안 쓴 영입 횟수는 어차피 주말에 사라져 기준이 낮다)
 STATUS = {"OUT": "OUT", "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP"}  # ESPN 판타지에서 쓰는 용어 그대로(사용자 요청)
 
 ICON_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
@@ -273,6 +275,70 @@ def plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, n=MOVES,
     return moves, active, alts
 
 
+def stream_plan(active, roster, fas, week, slots, today_sp, limits, n, force=False, keep=()):
+    """이번 매치업 남은 날(week)에 영입 n번으로 빈 선발 자리를 채우는 계획.
+    장기 가치가 가장 낮은 STREAM_SPOTS명의 자리만 쓴다(그 자리에 들어온 선수는 다시 내보낼 수 있다).
+    단, 바로 영입할 수 있는 최고 FA보다 가치가 높은 선수의 자리는 쓰지 않는다(좋은 선수를 내보내지 않기, 사용자 요청).
+    force=True면 그 보호를 풀고 가장 약한 1명의 자리만 써 본다(화면에 참고로만 보여 줌). keep = 자리로 쓰지 않을 선수 id(재편안으로 이번 주 데려오는 선수).
+    날짜별 로스터를 들고, 이번 주 선발 점수를 가장 많이 올리는 (자리, 날, FA)를 하나씩 고른다.
+    반환: NS(moves [(날, 방출, 영입, 그 선수가 내 팀에 있는 동안의 경기 수, 그 교체로 오른 점수)] 날짜순,
+             base·total 이번 주 예상 점수 전·후, spots 쓴 자리 수)
+    ponytail: 한 번에 하나씩 고르는 탐욕법이라 최적은 아니다. 웨이버 선수는 당일 영입이 안 돼 뺀다."""
+    days = list(week)
+    P = {p.playerId: p for p in active + fas}
+    cache = {}
+
+    def score(sp, ids):
+        playing = tuple(sorted((i for i in ids if game_value(P[i], sp, today_sp) > 0), key=str))
+        if (sp, playing) not in cache:
+            cache[sp, playing] = best_lineup([(game_value(P[i], sp, today_sp), P[i].eligibleSlots) for i in playing], slots)[0]
+        return cache[sp, playing]
+
+    cands = [f for f in sorted(fas, key=ros, reverse=True) if not f.waiver][:40]
+    top = max(map(ros, cands), default=0)
+    low = sorted((p for p in active if p.playerId not in keep), key=ros)
+    spot_ids = [p.playerId for p in (low[:1] if force else [p for p in low[:STREAM_SPOTS] if ros(p) < top])]
+    fixed = frozenset(p.playerId for p in active) - set(spot_ids)
+    spots = [{sp: i for sp in days} for i in spot_ids]  # 자리마다 날짜 → 그날 그 자리에 있는 선수
+    held = [p for p in roster if p.playerId not in fixed and p.playerId not in spot_ids]  # IR 등(포지션 인원 제한 계산용)
+    team = lambda sp: fixed | {s[sp] for s in spots}
+    base = sum(score(sp, team(sp)) for sp in days)
+    changes, used = [], set()  # (자리 번호, 날, FA)
+    for _ in range(n):
+        best = None
+        for k, spot in enumerate(spots):
+            for d in days:
+                if any(c[0] == k and c[1] == d for c in changes):
+                    continue  # 같은 자리를 같은 날 두 번 바꾸면 영입만 낭비
+                end = min([c[1] for c in changes if c[0] == k and c[1] > d], default=days[-1] + 1)  # 그 자리의 다음 교체 전까지
+                span = [t for t in days if d <= t < end]
+                for fa in cands:
+                    if fa.playerId in used or not any(game_value(fa, t, today_sp) > 0 for t in span):
+                        continue
+                    if not force and ros(fa) < ros(P[spot_ids[k]]):
+                        continue  # 처음 내보낸 선수보다 장기 가치가 낮은 FA는 안 쓴다(매치업이 끝나면 더 약한 선수가 남지 않게)
+                    if fa.position in limits and any(
+                            sum(P[i].position == fa.position for i in team(t) - {spot[t]})
+                            + sum(p.position == fa.position for p in held) >= limits[fa.position] for t in span):
+                        continue  # 리그 포지션 인원 제한 초과(그 선수가 내 팀에 있는 모든 날 기준)
+                    g = sum(score(t, (team(t) - {spot[t]}) | {fa.playerId}) - score(t, team(t)) for t in span)
+                    if g > MIN_STREAM and (best is None or g >= best[0]):  # 이득이 같으면 늦은 날(꼭 필요할 때 영입)
+                        best = (g, k, d, fa, span)
+        if not best:
+            break
+        g, k, d, fa, span = best
+        for t in span:
+            spots[k][t] = fa.playerId
+        changes.append((k, d, fa, g))
+        used.add(fa.playerId)
+    moves = []
+    for k, d, fa, g in sorted(changes, key=lambda c: (c[1], c[0])):
+        prev = spot_ids[k] if d == days[0] else spots[k][days[days.index(d) - 1]]  # 전날 그 자리에 있던 선수
+        stay = [t for t in days if t >= d and spots[k][t] == fa.playerId]
+        moves.append((d, P[prev], fa, sum(game_value(fa, t, today_sp) > 0 for t in stay), g))
+    return NS(moves=moves, base=base, total=sum(score(sp, team(sp)) for sp in days), spots=len(spot_ids))
+
+
 def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end, final_sp, scores=(0, 0), acq=None):
     """scores = 이번 매치업 현재 점수 (나, 상대).
     acq = 영입 한도 NS(limit 매치업당 한도(-1이면 무제한), used 이번 매치업에 쓴 횟수, next_start 다음 매치업 시작 날짜)"""
@@ -297,6 +363,19 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     idle = (len(slots) * len(sps) - sum(base.starts.values())) / max(1, len(sps))
     opp_active = [p for p in opp_roster if p.lineupSlot != "IR"]
     me_w = simulate(active, week, slots, today_sp)
+    # 이번 주 빈자리 채우기: 재편안 중 이번 주에 할 교체를 먼저 반영한 로스터로, 남는 영입 횟수만 쓴다
+    # (같은 영입 횟수·같은 방출 선수를 두 계획이 따로 쓰지 않게. 무제한 리그는 한도 기본값만큼)
+    now = [m for m, w in zip(moves, week_of) if w == 0]
+    gone, came = {m[1].playerId for m in now}, [m[0] for m in now]
+    s_active = [p for p in active if p.playerId not in gone] + came
+    s_roster = [p for p in roster if p.playerId not in gone] + came
+    s_fas = [f for f in fas if all(f is not c for c in came)]
+    n_acq = max(0, (ACQ_LIMIT if left is None else left) - len(now))
+    keep = {p.playerId for p in came}
+    stream = stream_plan(s_active, s_roster, s_fas, week, slots, today_sp, limits, n_acq, keep=keep)
+    stream.now = len(now)
+    if not stream.moves and n_acq and not stream.spots:  # 내보낼 만한 선수가 없을 때: 가장 약한 1명의 자리를 쓰면 얼마나 오르는지 참고로만
+        stream.alt = stream_plan(s_active, s_roster, s_fas, week, slots, today_sp, limits, n_acq, force=True, keep=keep)
     opp_w = simulate(opp_active, week, slots, today_sp) if opp_active else None
     win = diff = sd = None
     if opp_w:  # 승률: 현재 점수 + 남은 예상, 남은 선발 경기의 흔들림과 추정 오차로 정규분포 근사
@@ -322,7 +401,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
               win=win, me_sd=spread(ZERO, me_w, active), opp_sd=spread(ZERO, opp_w, opp_active) if opp_w else 0,
-              active=active, acq=acq, left=left, week_of=week_of, alts=alts, wrank=wrank)
+              active=active, acq=acq, left=left, week_of=week_of, alts=alts, wrank=wrank, stream=stream, week_end=week_end)
 
 
 def plan_data(a, info=lambda p: ""):
@@ -686,6 +765,33 @@ def render(league_name, standings, me, box, opp, a):
         quota = (f'<div class="quota{" zero" if a.left == 0 else ""}"><p class=q-main>이번 매치업 영입 <b>{a.left}회 남음</b> '
                  f'<span>({a.acq.used}회 사용 / 한도 {a.acq.limit}회)</span></p><p class=q-sub>{e(sub)}</p></div>')
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
+
+    # 이번 매치업 빈자리 채우기: 선발 자리가 비는 날에 경기가 있는 FA를 그날 데려온다(날짜는 미국 기준)
+    def day(sp):
+        d = n0 - timedelta(days=a.week_end + 1 - sp) if n0 else None
+        return f"{d.month}/{d.day} {'월화수목금토일'[d.weekday()]}" if d else ("오늘" if sp == a.today_sp else f"{sp - a.today_sp}일 뒤")
+    card = lambda l, p, c: f"<div class={c}><small>{l}</small><b>{e(p.name)}</b><small>{poss(p)} {e(p.proTeam)} {status(p)}</small></div>"
+    st = a.stream
+    if st.moves:
+        first = f"아래 재편안의 이번 주 영입 {st.now}번을 먼저 하고, " if st.now else ""
+        stream = (f"<p class=lead>{first}남는 영입 {len(st.moves)}번으로 선발 자리가 비는 날을 채우면 이번 매치업 남은 예상 점수가 "
+                  f"<b>{st.base:.0f}</b>점에서 <b>{st.total:.0f}</b>점으로 늘어요(+{st.total - st.base:.0f}).</p>"
+                  "<p class=note>표의 날짜는 미국 날짜예요. 한국 시간으로는 그다음 날 오전, 영입할 선수의 경기가 시작되기 전에 바꾸면 돼요.</p><ol class=moves>"
+                  + "".join(f"<li><span class=when>{day(sp)}</span><div class=pair>{card('방출', d, 'out')}<span class=arrow aria-hidden=true>→</span>"
+                            f"{card('영입', f, 'in')}</div><span class=gain>+{g:.0f}<small>{n}경기 뜀</small></span></li>" for sp, d, f, n, g in st.moves)
+                  + "</ol><p class=note>영입한 선수를 며칠 뒤 다시 내보내는 줄도 있어요(빈 날만 쓰고 바꾸기). 처음 내보낸 선수는 돌아오지 않고, "
+                  "매치업이 끝나면 마지막에 영입한 선수가 남아요. 바로 영입할 수 있는 선수만 넣었고, 가치가 가장 낮은 "
+                  f"{STREAM_SPOTS}명의 자리만 써요.</p>")
+    elif a.left == 0:
+        stream = "<p class=lead>다음 매치업에 다시 계산돼요.</p>"
+    else:
+        alt = getattr(st, "alt", None)
+        stream = ("<p class=lead>아래 재편안의 이번 주 영입을 하고 나면 남는 영입이 없어요.</p>" if st.now and not (a.left is None or a.left > st.now)
+                  else "<p class=lead>이번 매치업에는 영입으로 채울 만한 빈자리가 없어요.</p>")
+        if alt and alt.moves:
+            stream = (f"<p class=lead>내보낼 만한 선수가 없어요. 가장 약한 {e(alt.moves[0][1].name)}도 바로 영입할 수 있는 FA보다 좋은 선수예요.</p>"
+                      f"<p class=note>참고: {e(alt.moves[0][1].name)}의 자리를 이번 매치업 내내 돌려 쓰면(영입 {len(alt.moves)}번) 예상 점수는 "
+                      f"+{alt.total - alt.base:.0f}점이지만, 그 선수를 잃어요.</p>")
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
 
     # 포지션 구성판: 재편안이 인원을 늘리면 부족했던 것, 줄이면 과다였던 것
@@ -770,7 +876,8 @@ def render(league_name, standings, me, box, opp, a):
 <p class=date>최근 업데이트 <b>{now.month}월 {now.day}일 {now.hour:02d}:{now.minute:02d}</b> <span id=ago></span> <button type=button id=upd hidden>새 리포트 확인</button></p></header>
 <p id=updmsg class=note role=status></p>
 
-<h2>재편안</h2>{quota}<ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
+{quota}<h2>이번 매치업 빈자리 채우기</h2>{stream}
+<h2>재편안 (3주 기준)</h2><ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
 <script>{script}</script>
 <script>{UPD_JS}</script>
 
@@ -795,6 +902,7 @@ def render(league_name, standings, me, box, opp, a):
 <li>순증가: 그 선수를 영입하고 방출 대상을 내보냈을 때 {a.days}일 선발 점수 차이. 방출 대상은 장기 가치(경기당 추정 × 출전율)가 더 낮은 선수만 골라요.</li>
 <li>확실도: 교체로 선발 경기가 늘고 주는 선수들의 경기별 점수 흔들림(작년·올해 경기 기록)과 경기당 추정의 오차(± 숫자)로, 순증가가 0보다 클 확률을 계산해요. 순증가 {MIN_GAIN}점 이하이거나 확실도 {MIN_CONF:.0%} 미만인 근소한 교체는 영입 한도만 쓰게 되니 추천하지 않아요.</li>
 <li>웨이버: 내 웨이버 순위는 {a.wrank}번째예요. 앞선 팀마다 {WAIVER_Q:.0%} 확률로 같은 선수를 신청한다고 가정해 영입 확률을 계산해요(가정값). 신청이 실패해도 영입 횟수는 줄지 않으니 순위는 순증가대로 두고, 실패했을 때 할 대안을 함께 보여 줘요. 웨이버를 따내면 순위가 맨 뒤로 가서 재편안에 웨이버는 한 명만 넣어요.</li>
+<li>빈자리 채우기: 재편안의 이번 주 교체를 먼저 한 로스터에서, 가치가 가장 낮은 {STREAM_SPOTS}명의 자리를 선발 자리가 비는 날에 경기가 있는 FA로 바꿔 가며 이번 매치업 선발 점수를 가장 많이 올리는 순서를 골라요. 남는 영입 횟수만 써요. 한 번에 하나씩 고르는 방식이라 완벽한 최적은 아니에요.</li>
 <li>승률: 현재 점수 + 남은 예상과, 남은 선발 경기의 흔들림으로 계산해요. 80% 범위는 예상 최종이 열 번 중 여덟 번 들어가는 구간이에요.</li>
 </ul></main></body></html>"""
 
