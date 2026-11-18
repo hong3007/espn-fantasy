@@ -111,6 +111,13 @@ assert "내보낼 만한 선수가 없어요. 가장 약한 W도" in pweak and "
 assert report.stream_plan(roster, roster, [c2], sps, slots, 1, {"C": 0}, 3).moves == [], "포지션 인원 제한을 넘는 영입은 하지 않는다"
 assert report.stream_plan(roster, roster, [P("Small", 21, ["C"], [1])], sps, slots, 1, {}, 3).moves == [], "MIN_STREAM 이하(+1)는 영입하지 않는다"
 assert sum(m[4] for m in s2.moves) == s2.total - s2.base, "줄마다 오른 점수의 합 = 전체 증가"
+# 로스터 잠금: 오늘 첫 경기가 이미 시작했으면(locked) 영입은 내일부터 계산. 날짜 칸에 잠금 시각(한국 시간)
+mk_lk = lambda locked: report.analyze(roster, [], [c2, bad], slots, {}, 1, 1, 6, 6, acq=NS(
+    limit=6, used=0, next_start=date(2026, 11, 9), locked=locked, first={2: datetime(2026, 11, 4, 9, 30)}))
+alk, aun = mk_lk(True), mk_lk(False)
+assert (alk.sps.start, aun.sps.start) == (2, 1) and alk.stream.base < aun.stream.base, "잠겼으면 재편안·빈자리 채우기 모두 내일(2일)부터"
+alk.stream = NS(moves=[(2, w, c2, 5, 30.0)], base=0.0, total=30.0, now=0, spots=1)
+assert "<small>한국 4일 9:30까지</small>" in report.render("우리리그", [me_t, other], me_t, None, None, alk)
 # 처음 내보낸 선수보다 장기 가치가 낮은 FA로는 바꾸지 않는다: Low(15)는 C1(20) 자리엔 못 들어가고 W(10) 자리에만
 low15 = P("Low", 15, ["C", "PG", "G"], [2, 3, 4, 5, 6])
 s3 = report.stream_plan(roster, roster, [P("Strong", 30, ["C"], [1]), low15], sps, slots, 1, {}, 6)

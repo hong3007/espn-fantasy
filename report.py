@@ -140,6 +140,7 @@ def prepare(p, raw, year, today_sp, today):
     p.waiver = raw.get("status") == "WAIVERS"
     p.injuryStatus = p.injuryStatus or None
     now = datetime.now()  # 이미 시작한 경기는 현재 점수에 들어가 있으니 남은 일정에서 뺀다
+    p.tips = {int(k): g["date"] for k, g in p.schedule.items() if g.get("date")}  # 날짜별 경기 시작 시각(로스터 잠금 계산용, 빼기 전)
     p.schedule = {k: g for k, g in p.schedule.items() if not g.get("date") or g["date"] > now}
     p.back_sp = 0
     if p.injuryStatus in ("OUT", "SUSPENSION"):  # 복귀일을 모르면 1주 결장으로 가정
@@ -344,7 +345,10 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     acq = 영입 한도 NS(limit 매치업당 한도(-1이면 무제한), used 이번 매치업에 쓴 횟수, next_start 다음 매치업 시작 날짜)"""
     acq = acq or NS(limit=-1, used=0, next_start=None)
     left = max(0, acq.limit - acq.used) if acq.limit > 0 else None  # 이번 매치업에 남은 영입 횟수(None=무제한)
-    start = today_sp if left != 0 else week_end + 1  # 이번 매치업 영입을 다 썼으면 재편안은 다음 매치업부터 계산
+    # 이 리그는 로스터가 그날 첫 NBA 경기에 잠긴다(rosterLocktimeType FIRSTGAME_SCORINGPERIOD, 2026-11-18 확인).
+    # 첫 경기가 이미 시작했으면 지금 영입해도 내일부터 뛰므로 영입 계산은 내일부터
+    add_sp = today_sp + bool(getattr(acq, "locked", False))
+    start = add_sp if left != 0 else week_end + 1  # 이번 매치업 영입을 다 썼으면 재편안은 다음 매치업부터 계산
     if start > final_sp:
         start = today_sp
     # 몇 번째 교체를 몇 주 뒤에 하는지: 이번 매치업 남은 횟수만큼은 이번 주, 이후는 매치업마다 한도만큼
@@ -372,10 +376,11 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     s_fas = [f for f in fas if all(f is not c for c in came)]
     n_acq = max(0, (ACQ_LIMIT if left is None else left) - len(now))
     keep = {p.playerId for p in came}
-    stream = stream_plan(s_active, s_roster, s_fas, week, slots, today_sp, limits, n_acq, keep=keep)
+    s_week = range(add_sp, week.stop)
+    stream = stream_plan(s_active, s_roster, s_fas, s_week, slots, today_sp, limits, n_acq, keep=keep)
     stream.now = len(now)
     if not stream.moves and n_acq and not stream.spots:  # 내보낼 만한 선수가 없을 때: 가장 약한 1명의 자리를 쓰면 얼마나 오르는지 참고로만
-        stream.alt = stream_plan(s_active, s_roster, s_fas, week, slots, today_sp, limits, n_acq, force=True, keep=keep)
+        stream.alt = stream_plan(s_active, s_roster, s_fas, s_week, slots, today_sp, limits, n_acq, force=True, keep=keep)
     opp_w = simulate(opp_active, week, slots, today_sp) if opp_active else None
     win = diff = sd = None
     if opp_w:  # 승률: 현재 점수 + 남은 예상, 남은 선발 경기의 흔들림과 추정 오차로 정규분포 근사
@@ -634,6 +639,7 @@ h2{font-size:1.1rem;margin:40px 0 10px}
 .moves li{display:grid;grid-template-columns:70px 1fr 112px;gap:12px;align-items:center;background:var(--surface);
 border:1px solid var(--line);border-left:4px solid var(--ball);border-radius:8px;padding:12px 16px}
 .when{font:600 .9rem var(--num);color:var(--muted)}
+.when small{display:block;font:400 .72rem var(--text)}
 .now{font-size:1.15rem;font-weight:600;margin-bottom:6px}
 .now .hl{color:var(--ball)}
 .pair{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;min-width:0}
@@ -769,14 +775,17 @@ def render(league_name, standings, me, box, opp, a):
     # 이번 매치업 빈자리 채우기: 선발 자리가 비는 날에 경기가 있는 FA를 그날 데려온다(날짜는 미국 기준)
     def day(sp):
         d = n0 - timedelta(days=a.week_end + 1 - sp) if n0 else None
-        return f"{d.month}/{d.day} {'월화수목금토일'[d.weekday()]}" if d else ("오늘" if sp == a.today_sp else f"{sp - a.today_sp}일 뒤")
+        t = getattr(a.acq, "first", {}).get(sp)  # 그날 첫 NBA 경기 시작(한국 시간) = 로스터 잠금
+        lock = f"<small>한국 {t.day}일 {t.hour}:{t.minute:02d}까지</small>" if t else ""
+        return (f"{d.month}/{d.day} {'월화수목금토일'[d.weekday()]}" if d else ("오늘" if sp == a.today_sp else f"{sp - a.today_sp}일 뒤")) + lock
     card = lambda l, p, c: f"<div class={c}><small>{l}</small><b>{e(p.name)}</b><small>{poss(p)} {e(p.proTeam)} {status(p)}</small></div>"
     st = a.stream
     if st.moves:
         first = f"아래 재편안의 이번 주 영입 {st.now}번을 먼저 하고, " if st.now else ""
         stream = (f"<p class=lead>{first}남는 영입 {len(st.moves)}번으로 선발 자리가 비는 날을 채우면 이번 매치업 남은 예상 점수가 "
                   f"<b>{st.base:.0f}</b>점에서 <b>{st.total:.0f}</b>점으로 늘어요(+{st.total - st.base:.0f}).</p>"
-                  "<p class=note>표의 날짜는 미국 날짜예요. 한국 시간으로는 그다음 날 오전, 영입할 선수의 경기가 시작되기 전에 바꾸면 돼요.</p><ol class=moves>"
+                  "<p class=note>표의 날짜는 미국 날짜예요. 이 리그는 그날 첫 NBA 경기가 시작되면 로스터가 잠겨서, 날짜 아래 시각(한국 시간) 전에 "
+                  "영입해야 그날부터 뛰어요. 늦으면 다음 날부터 뛰어요.</p><ol class=moves>"
                   + "".join(f"<li><span class=when>{day(sp)}</span><div class=pair>{card('방출', d, 'out')}<span class=arrow aria-hidden=true>→</span>"
                             f"{card('영입', f, 'in')}</div><span class=gain>+{g:.0f}<small>{n}경기 뜀</small></span></li>" for sp, d, f, n, g in st.moves)
                   + "</ol><p class=note>영입한 선수를 며칠 뒤 다시 내보내는 줄도 있어요(빈 날만 쓰고 바꾸기). 처음 내보낸 선수는 돌아오지 않고, "
@@ -1025,8 +1034,13 @@ def main():
     mine = next(t for t in st_all["teams"] if t["id"] == me.team_id)
     used = mine.get("transactionCounter", {}).get("matchupAcquisitionTotals", {}).get(str(league.currentMatchupPeriod), 0)
     # 한도: ACQ_LIMIT(6). 바뀌면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수)으로 덮어쓴다
+    first = {}  # 날짜별 그날 첫 NBA 경기 시작 시각(내 팀·상대·FA 일정으로 사실상 전 구단)
+    for p in rostered + fas:
+        for sp, t in p.tips.items():
+            first[sp] = min(first.get(sp, t), t)
     acq = NS(limit=int(os.getenv("ACQ_LIMIT") or ACQ_LIMIT), used=int(used), wrank=int(mine.get("waiverRank") or 1),
-             next_start=now.date() + timedelta(days=week_end - today_sp + 1))
+             next_start=now.date() + timedelta(days=week_end - today_sp + 1),
+             first=first, locked=today_sp in first and first[today_sp] <= datetime.now())
     a = analyze(me.roster, opp.roster if opp else [], fas, slots, limits, counts.get("13", 0),
                 today_sp, week_end, league.finalScoringPeriod, scores, acq)
     out = HERE / "report.html"
