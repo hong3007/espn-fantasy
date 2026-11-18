@@ -134,6 +134,20 @@ assert all(team_c(t) <= 1 for t in lw), [(d, o.name, f.name) for d, o, f, *_ in 
 ab = report.analyze(roster + [out], [], [c2, hurt, c4, bad], slots, {}, 1, 1, 3, 6, acq=NS(limit=6, used=0, next_start=date(2026, 11, 2)))
 assert ab.stream.now == 2 and len(ab.stream.moves) <= 4 and all(m[1] not in (c2, c4) and m[2] not in (c2, c4) for m in ab.stream.moves)
 
+# 트레이드 제안: 상대 팀은 PG가 없고 C가 둘(C 자리 1개), 나는 C가 1일만 뛰고 PG가 둘(PG 자리 1개) → W(PG 10) ⇄ OC2(C 10)는 서로 이득
+oc1, oc2 = P("OC1", 30, ["C"], sps), P("OC2", 10, ["C"], sps)
+tr = report.trade_ideas(roster, roster, [("친구팀", [oc1, oc2])], sps, slots, 1, {})
+# W ⇄ OC2(10 ⇄ 10): 나 +50(빈 C 자리 2~6일). G1 ⇄ OC1(30 ⇄ 30): 나 +40. 상대 팀 이득은 따지지 않는다(사용자 요청)
+assert [(x.name, y.name, n, g) for g, x, y, n in tr] == [("W", "OC2", "친구팀", 50), ("G1", "OC1", "친구팀", 40)], tr
+assert [(x.name, y.name) for _, x, y, _ in report.trade_ideas(roster, roster, [("친구팀", [P("OPG", 40, ["PG"], sps), oc2])], sps, slots, 1, {})] == [("W", "OC2")], "상대가 손해여도 가치가 비슷하면 냄"
+assert report.trade_ideas(roster, roster, [("친구팀", [P("Star", 50, ["C"], sps), P("Star2", 50, ["C"], sps)])], sps, slots, 1, {}) == [], "가치 차이가 크면(내 선수 10~30 ⇄ 50) 안 냄"
+assert all(y.name != "OCh" for _, x, y, _ in report.trade_ideas(roster, roster, [("친구팀", [oc1, P("OCh", 10, ["C"], sps, injury="OUT", back=99)])], sps, slots, 1, {})), "OUT 선수는 안 넣음"
+assert report.trade_ideas(roster, roster, [("친구팀", [oc1, oc2])], sps, slots, 1, {}, keep={"W", "G1"}) == [], "재편안·빈자리 채우기에 쓰는 선수는 보내지 않음"
+assert all(y.position != "C" or x.position == "C" for _, x, y, _ in report.trade_ideas(roster, roster, [("친구팀", [oc1, oc2])], sps, slots, 1, {"C": 1})), "C 제한 1이면 C를 하나 더 받지 않음"
+at = report.analyze(roster, [], [], slots, {}, 1, 1, 3, 6, others=[("<b>친구</b>", [oc1, oc2])])
+pt = report.render("우리리그", [me_t, other], me_t, None, None, at)
+assert "<h2>트레이드 제안</h2>" in pt and "&lt;b&gt;친구" in pt and "일 선발 점수</small>" in pt and pt.index("id=pills") < pt.index("<h2>트레이드 제안</h2>")
+
 # 상대가 있고 지는 중: 이번 매치업용 추천은 웨이버 제외, IR 복귀 안내
 ir = P("IRback", 25, ["PG"], sps, slot="IR")
 other.roster = [P("O1", 50, ["PG"], sps), P("O2", 50, ["C"], sps)]

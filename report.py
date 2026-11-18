@@ -30,6 +30,8 @@ CV_M = 10    # 선수 개인의 경기 변동계수를 리그 공통값 쪽으�
 ACQ_LIMIT = 6  # 매치업(주)당 영입 한도. ESPN API에는 이 값이 없어(설정의 1은 다른 뜻) 사용자 확인값을 쓴다(2026-11-08)
 STREAM_SPOTS = 2  # 이번 주 빈자리 채우기에 쓸 자리 수: 장기 가치가 가장 낮은 선수 2명의 자리만 돌려 쓴다
 MIN_STREAM = 8    # 이번 주 선발 점수가 이보다 적게 오르는 영입은 하지 않는다(안 쓴 영입 횟수는 어차피 주말에 사라져 기준이 낮다)
+TRADES = 3        # 트레이드 제안 수(영입 다음 순위의 참고 안)
+TRADE_FAIR = .05  # 트레이드 상대가 받아들일 만한 가치 차이: 받는 선수 가치가 내주는 선수보다 5% 넘게 낮으면 안 낸다
 STATUS = {"OUT": "OUT", "DAY_TO_DAY": "DTD", "SUSPENSION": "SUSP"}  # ESPN 판타지에서 쓰는 용어 그대로(사용자 요청)
 
 ICON_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
@@ -340,7 +342,39 @@ def stream_plan(active, roster, fas, week, slots, today_sp, limits, n, force=Fal
     return NS(moves=moves, base=base, total=sum(score(sp, team(sp)) for sp in days), spots=len(spot_ids))
 
 
-def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end, final_sp, scores=(0, 0), acq=None):
+def trade_ideas(mine, my_roster, others, sps, slots, today_sp, limits, n=TRADES, keep=()):
+    """1:1 트레이드 제안 [(내 증가, 보낼 내 선수, 받을 상대 선수, 상대 팀 이름)] 내 증가 큰 순.
+    mine·my_roster = 재편안(FA 영입)을 다 한 뒤의 내 선발 후보·로스터. others = [(팀 이름, 로스터)].
+    친구가 받아 줄 만하게 두 선수의 장기 가치(ros) 차이가 TRADE_FAIR 이내인 것 중, 내 sps 기간 선발 점수가 가장 많이 오르는 순.
+    상대 팀 이득은 따지지 않는다(사용자 2026-11-18: "비슷한 가치로 내가 최대 이득"). OUT·SUSP·IR 선수는 넣지 않는다.
+    keep = 보내지 않을 내 선수 id(재편안으로 데려올 FA, 빈자리 채우기로 내보낼 선수 — 화면의 다른 계획과 겹치지 않게).
+    ponytail: 1:1만, 다른 팀 사정(그 팀의 다른 거래)은 모른다."""
+    ok = lambda p: p.injuryStatus not in ("OUT", "SUSPENSION") and p.lineupSlot != "IR"
+    fits = lambda ros_, out, inn: inn.position not in limits or sum(
+        p.position == inn.position for p in ros_ if p is not out) < limits[inn.position]
+    base = simulate(mine, sps, slots, today_sp).total
+    ideas = []
+    for name, their_roster in others:
+        theirs = [p for p in their_roster if p.lineupSlot != "IR"]
+        for x in (p for p in mine if ok(p) and p.playerId not in keep):
+            for y in filter(ok, theirs):
+                if not (1 - TRADE_FAIR) * ros(y) <= ros(x) <= ros(y) / (1 - TRADE_FAIR):
+                    continue  # 가치가 비슷한 선수끼리만(상대가 손해로 느끼지 않게, 나도 손해 보지 않게)
+                if not (fits(my_roster, x, y) and fits(their_roster, y, x)):
+                    continue  # 리그 포지션 인원 제한
+                g = simulate([p for p in mine if p is not x] + [y], sps, slots, today_sp).total - base
+                if g > MIN_GAIN:
+                    ideas.append((g, x, y, name))
+    ideas.sort(key=lambda t: t[0], reverse=True)
+    out, used = [], set()
+    for t in ideas:  # 같은 선수가 여러 안에 겹치지 않게
+        if t[1].playerId not in used and t[2].playerId not in used:
+            out.append(t)
+            used |= {t[1].playerId, t[2].playerId}
+    return out[:n]
+
+
+def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end, final_sp, scores=(0, 0), acq=None, others=()):
     """scores = 이번 매치업 현재 점수 (나, 상대).
     acq = 영입 한도 NS(limit 매치업당 한도(-1이면 무제한), used 이번 매치업에 쓴 횟수, next_start 다음 매치업 시작 날짜)"""
     acq = acq or NS(limit=-1, used=0, next_start=None)
@@ -406,7 +440,9 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
               win=win, me_sd=spread(ZERO, me_w, active), opp_sd=spread(ZERO, opp_w, opp_active) if opp_w else 0,
-              active=active, acq=acq, left=left, week_of=week_of, alts=alts, wrank=wrank, stream=stream, week_end=week_end)
+              active=active, acq=acq, left=left, week_of=week_of, alts=alts, wrank=wrank, stream=stream, week_end=week_end,
+              trades=trade_ideas(after, [p for p in roster if p.lineupSlot == "IR"] + after, others, sps, slots, today_sp, limits,
+                                 keep={m[0].playerId for m in moves} | {m[1].playerId for m in stream.moves}))
 
 
 def plan_data(a, info=lambda p: ""):
@@ -802,6 +838,20 @@ def render(league_name, standings, me, box, opp, a):
                       f"<p class=note>참고: {e(alt.moves[0][1].name)}의 자리를 이번 매치업 내내 돌려 쓰면(영입 {len(alt.moves)}번) 예상 점수는 "
                       f"+{alt.total - alt.base:.0f}점이지만, 그 선수를 잃어요.</p>")
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
+    # 트레이드 제안: 재편안(FA 영입)을 다 한 뒤 기준, 친구 팀과 1:1
+    if a.trades:
+        vs = opp.team_name if opp else None  # 이번 매치업 상대 팀이면 표시
+        trade = (f"<p class=lead>FA 영입(위 재편안)을 다 한 뒤 더 보강하려면, 친구 팀과 이렇게 1:1로 바꿔 볼 만해요. "
+                 f"두 선수 가치가 {TRADE_FAIR:.0%} 안으로 비슷해 친구가 받아 줄 만한 안 중에서, 내 선발 점수가 가장 많이 오르는 순이에요.</p><ol class=moves>"
+                 + "".join(f"<li><span class=when>{e(name)}{'<small>이번 주 상대</small>' if name == vs else ''}</span>"
+                           f"<div class=pair>{card('보내기', x, 'out')}<span class=arrow aria-hidden=true>⇄</span>"
+                           f"{card('받기', y, 'in')}</div><span class=gain>+{g:.0f}<small>{a.days}일 선발 점수</small></span></li>"
+                           for g, x, y, name in a.trades)
+                 + f"</ol><p class=note>점수는 앞으로 {a.days}일 선발 점수 증가예요. 가치(경기당 추정 × 출전율): "
+                 + ", ".join(f"{e(x.name)} {ros(x):.1f} / {e(y.name)} {ros(y):.1f}" for _, x, y, _ in a.trades)
+                 + ". 위 알약 ×로 바꾼 재편안은 여기 반영되지 않아요. 이 리포트는 공개 페이지라 친구들도 이 제안을 볼 수 있어요.</p>")
+    else:
+        trade = "<p class=lead>지금은 가치가 비슷하면서 내 점수가 오르는 1:1 트레이드가 없어요.</p>"
 
     # 포지션 구성판: 재편안이 인원을 늘리면 부족했던 것, 줄이면 과다였던 것
     gain = lambda b: b[2] if b else 0
@@ -887,6 +937,7 @@ def render(league_name, standings, me, box, opp, a):
 
 {quota}<h2>이번 매치업 빈자리 채우기</h2>{stream}
 <h2>재편안 (3주 기준)</h2><ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
+<h2>트레이드 제안</h2>{trade}
 <script>{script}</script>
 <script>{UPD_JS}</script>
 
@@ -912,6 +963,7 @@ def render(league_name, standings, me, box, opp, a):
 <li>확실도: 교체로 선발 경기가 늘고 주는 선수들의 경기별 점수 흔들림(작년·올해 경기 기록)과 경기당 추정의 오차(± 숫자)로, 순증가가 0보다 클 확률을 계산해요. 순증가 {MIN_GAIN}점 이하이거나 확실도 {MIN_CONF:.0%} 미만인 근소한 교체는 영입 한도만 쓰게 되니 추천하지 않아요.</li>
 <li>웨이버: 내 웨이버 순위는 {a.wrank}번째예요. 앞선 팀마다 {WAIVER_Q:.0%} 확률로 같은 선수를 신청한다고 가정해 영입 확률을 계산해요(가정값). 신청이 실패해도 영입 횟수는 줄지 않으니 순위는 순증가대로 두고, 실패했을 때 할 대안을 함께 보여 줘요. 웨이버를 따내면 순위가 맨 뒤로 가서 재편안에 웨이버는 한 명만 넣어요.</li>
 <li>빈자리 채우기: 재편안의 이번 주 교체를 먼저 한 로스터에서, 가치가 가장 낮은 {STREAM_SPOTS}명의 자리를 선발 자리가 비는 날에 경기가 있는 FA로 바꿔 가며 이번 매치업 선발 점수를 가장 많이 올리는 순서를 골라요. 남는 영입 횟수만 써요. 한 번에 하나씩 고르는 방식이라 완벽한 최적은 아니에요.</li>
+<li>트레이드 제안: 재편안의 FA 영입을 다 한 로스터에서, 내 선수 1명과 친구 팀 선수 1명을 바꿨을 때 두 선수 가치 차이가 {TRADE_FAIR:.0%} 이내(친구가 받아 줄 만한 수준)이고 내 선발 점수가 {MIN_GAIN}점 넘게 오르는 안을, 내 점수가 많이 오르는 순으로 보여 줘요. 친구가 실제로 받을지는 몰라요.</li>
 <li>승률: 현재 점수 + 남은 예상과, 남은 선발 경기의 흔들림으로 계산해요. 80% 범위는 예상 최종이 열 번 중 여덟 번 들어가는 구간이에요.</li>
 </ul></main></body></html>"""
 
@@ -1017,9 +1069,11 @@ def main():
     start = min(map(int, league.matchup_ids.get(league.currentMatchupPeriod, [today_sp])))
     week_end = today_sp + 6 - now.weekday() + 7 * max(0, weeks - 1 - (today_sp - start) // 7)
 
-    rostered = me.roster + (opp.roster if opp else [])
-    cards = league.espn_request.get_player_card([p.playerId for p in rostered], league.finalScoringPeriod, [f"00{year - 1}"])
-    cards = {c["id"]: c for c in cards["players"]}
+    rostered = [p for t in league.teams for p in t.roster]  # 트레이드 제안 때문에 모든 팀 선수를 준비한다
+    cards = {}
+    for i in range(0, len(rostered), 50):  # 한 번에 너무 많이 요청하지 않게
+        ids = [p.playerId for p in rostered[i:i + 50]]
+        cards.update({c["id"]: c for c in league.espn_request.get_player_card(ids, league.finalScoringPeriod, [f"00{year - 1}"])["players"]})
     for p in rostered:
         prepare(p, cards.get(p.playerId, {}), year, today_sp, now.date())
     fas = [prepare(Player(r, year, league.pro_schedule), r, year, today_sp, now.date()) for r in free_agents_raw(league)]
@@ -1042,7 +1096,8 @@ def main():
              next_start=now.date() + timedelta(days=week_end - today_sp + 1),
              first=first, locked=today_sp in first and first[today_sp] <= datetime.now())
     a = analyze(me.roster, opp.roster if opp else [], fas, slots, limits, counts.get("13", 0),
-                today_sp, week_end, league.finalScoringPeriod, scores, acq)
+                today_sp, week_end, league.finalScoringPeriod, scores, acq,
+                others=[(t.team_name, t.roster) for t in league.teams if t is not me])
     out = HERE / "report.html"
     page = render(league.settings.name, league.standings(), me, box, opp, a)
     out.write_text(page, encoding="utf-8")
