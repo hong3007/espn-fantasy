@@ -394,7 +394,7 @@ def ir_plan(roster, ir_slots, drops=()):
         elif p.playerId in want:
             rows.append((p, "IR에 넣기", "벤치 자리가 하나 비어서 방출 없이 1명을 더 영입할 수 있어요."))
         elif p.injuryStatus in IR_OK:
-            rows.append((p, "방출", "IR 자리가 없어 벤치를 차지해요. 재편안대로 내보내고 그 자리에 FA를 데려와요.") if p.playerId in drops
+            rows.append((p, "방출", "IR 자리가 없어 벤치를 차지해요. 위 계획대로 내보내고 그 자리에 FA를 데려와요.") if p.playerId in drops
                         else (p, "벤치에서 기다리기", "IR 자리가 없어 벤치를 차지하지만, 가치가 높아 내보내기보다 기다리는 게 나아요."))
     order = {"IR에서 빼기": 0, "IR에 넣기": 1, "방출": 2, "벤치에서 기다리기": 3, "IR 유지": 4}
     return sorted(rows, key=lambda r: order[r[1]])
@@ -455,13 +455,16 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
             new = prob_above(diff + wk[0][2], sd)
             if new - win >= .1:  # 승률이 10%p 이상 오를 때만 1순위를 미루라고 권한다
                 acts.append(f"이번 매치업 승률 {win:.0%} → {new:.0%}: {wk[0][0].name} 영입, {wk[0][1].name} 방출이면 "
-                            f"남은 기간 +{wk[0][2]:.0f}점이에요." + (" 대신 재편안 1번은 다음 주로 밀려요." if acq.limit > 0 else ""))
+                            f"남은 기간 +{wk[0][2]:.0f}점이에요."
+                            + (" 대신 재편안 1번은 다음 주로 밀려요." if left is not None and left <= len(now) else ""))  # 실제로 밀릴 때만
     return NS(slots=slots, days=len(sps), sps=sps, base=base, new=simulate(after, sps, slots, today_sp),
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
               win=win, me_sd=spread(ZERO, me_w, active), opp_sd=spread(ZERO, opp_w, opp_active) if opp_w else 0,
               active=active, acq=acq, left=left, week_of=week_of, alts=alts, wrank=wrank, stream=stream, week_end=week_end,
-              ir=ir_plan(roster, ir_slots, drops={m[1].playerId for m in moves}), ir_slots=ir_slots,
+              # IR '방출'은 이번 주에 실제로 할 교체(재편안 이번 주·빈자리 채우기)의 방출 선수만(다음 주 교체를 지금 하라고 하지 않게)
+              ir=ir_plan(roster, ir_slots, drops={m[1].playerId for m in now} | {m[1].playerId for m in stream.moves}),
+              ir_slots=ir_slots, add_sp=add_sp,
               trades=trade_ideas(after, [p for p in roster if p.lineupSlot == "IR"] + after, others, sps, slots, today_sp, limits,
                                  keep={m[0].playerId for m in moves} | {m[1].playerId for m in stream.moves}))
 
@@ -585,7 +588,7 @@ if (typeof document !== "undefined") {
       `<button type=button data-id="${m.fa.id}" aria-label="${m.fa.n} 빼기">×</button></li>`).join("");
     $("#excluded").innerHTML = ex.size ? "뺀 선수: " + D.fa.filter(f => ex.has(f.id)).map(f => f.n).join(", ") : "";
     $("#plan").innerHTML = !M.length ? (ex.size ? "<p class=lead>뺀 선수 말고는 남은 후보가 없어요. 새로고침하면 처음으로 돌아가요.</p>" : "<p class=lead>영입 한도를 쓸 만큼 확실히 나은 FA가 없어요. 이대로 유지하세요.</p>") :
-      `<p class=now>${D.now} 할 일: <b>${M[0].d.n}</b> 방출하고 <b class=hl>${M[0].fa.n}</b> ${M[0].fa.w ? "웨이버 신청" : "영입"}</p>` +
+      `<p class=now>${D.now} 할 일${D.due || ""}: <b>${M[0].d.n}</b> 방출하고 <b class=hl>${M[0].fa.n}</b> ${M[0].fa.w ? "웨이버 신청" : "영입"}</p>` +
       `<p class=lead>아래 순서대로 바꾸면${M.some(m => m.fa.w) ? "(웨이버 성공 기준)" : ""} ${D.from}앞으로 ${D.days}일 선발 점수가 <b>${P.base.toFixed(0)}</b>점에서 <b>${P.after.toFixed(0)}</b>점으로 늘어요.</p>` +
       "<ol class=moves>" + M.map((m, i) => `<li><span class=when>${D.when[i]}</span><div class=pair>${card("방출", m.d, "out")}` +
         `<span class=arrow>→</span>${card("영입", m.fa, "in")}</div><span class=gain>+${m.g.toFixed(0)}` +
@@ -682,13 +685,17 @@ h1{font:700 1.6rem/1.15 var(--num);margin:0}
 .meta{color:var(--muted);font-size:.9rem;display:flex;gap:12px;flex-wrap:wrap}
 .date{margin-left:auto;color:var(--muted);font-size:.85rem}
 .date b{color:var(--ink);font-weight:600}
-#upd{margin-left:6px;min-height:36px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:.85rem;cursor:pointer}
+#upd{margin-left:6px;min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:.85rem;cursor:pointer}
 #upd:focus-visible{outline:2px solid var(--ball);outline-offset:2px}
 #upd:disabled{opacity:.6}
 #updmsg:empty{display:none}
 #updmsg{margin:6px 0 0}
 #updmsg a{color:var(--ink)}
 h2{font-size:1.1rem;margin:40px 0 10px}
+.todo{margin:0;padding-left:22px}
+.todo li{margin:8px 0}
+summary{cursor:pointer;margin-top:28px}
+summary h2{display:inline;margin:0}
 .lead{margin-bottom:12px}
 .lead b{font:700 1.15em var(--num)}
 .note{color:var(--muted);font-size:.82rem;margin-top:8px}
@@ -707,7 +714,7 @@ border:1px solid var(--line);border-left:4px solid var(--ball);border-radius:8px
 .gain{font:700 1.5rem var(--num);color:var(--good);text-align:right}
 .moves .gain small{display:block;font:400 .72rem var(--text);color:var(--muted);text-align:right}
 .wv{grid-column:1/-1;font-size:.8rem}
-.quota{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--good);border-radius:8px;padding:10px 14px;margin:0 0 12px}
+.quota{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--good);border-radius:8px;padding:10px 14px;margin:20px 0 12px}
 .quota.zero{border-left-color:var(--bad)}
 .q-main{margin:0;font-weight:600}
 .q-main b{font:700 1.4rem var(--num);color:var(--good)}
@@ -718,7 +725,7 @@ border:1px solid var(--line);border-left:4px solid var(--ball);border-radius:8px
 .pill{display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:999px;
 padding:4px 5px 4px 12px;font-weight:600}
 .pill span{font:700 .85rem var(--num);color:var(--ball)}
-.pill button{border:0;background:var(--line);color:var(--ink);width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:1rem;line-height:1}
+.pill button{border:0;background:var(--line);color:var(--ink);width:44px;height:44px;border-radius:50%;cursor:pointer;font-size:1rem;line-height:1}
 .pill button:focus-visible{outline:2px solid var(--ball);outline-offset:2px}
 #excluded:empty{display:none}
 .extra{margin:10px 0 0;padding-left:20px;font-size:.9rem}
@@ -765,6 +772,7 @@ border:1px solid var(--line);border-radius:8px;padding:18px 16px;text-align:cent
 .std .row.me{border-left:4px solid var(--ball);font-weight:700}
 .method{color:var(--muted);font-size:.85rem;padding-left:20px}
 @media (max-width:640px){
+h2{margin-top:28px}
 .board{grid-template-columns:1fr;background:var(--wood)}
 .col{display:grid;grid-template-columns:58px 1fr;column-gap:10px;align-items:start}
 .col+.col{border-left:0;border-top:2px solid var(--court)}
@@ -812,6 +820,9 @@ def render(league_name, standings, me, box, opp, a):
     data["now"] = data["when"][0] if a.acq.limit > 0 else "지금"
     n0 = a.acq.next_start
     data["from"] = f"다음 매치업({n0.month}/{n0.day})부터 " if a.left == 0 and n0 else ""
+    t0 = getattr(a.acq, "first", {}).get(getattr(a, "add_sp", a.today_sp))
+    data["due"] = (f" (한국 {t0.month}/{t0.day} {t0.hour}:{t0.minute:02d}까지)"
+                   if t0 and a.week_of and a.week_of[0] == 0 and a.left != 0 else "")  # × 다시 계산 때도 같은 마감
     mv = lambda t: [str(t[0].playerId), str(t[1].playerId), t[2], t[3]]
     data["init"] = {"moves": [mv(m) + [alt and mv(alt)] for m, alt in zip(a.moves, a.alts)],  # 첫 화면은 계산 없이
                     "base": a.base.total, "after": a.new.total}
@@ -819,10 +830,10 @@ def render(league_name, standings, me, box, opp, a):
     note = ""
     quota = ""  # 영입 한도 안내: 재편안 바로 위에 크게(남은 횟수가 0이면 빨간색)
     if a.acq.limit > 0:
-        sub = (f"다 썼어요. 재편안은 다음 매치업({n0.month}/{n0.day} {'월화수목금토일'[n0.weekday()]})부터예요." if a.left == 0 and n0
-               else "다 썼어요. 재편안은 다음 매치업부터예요." if a.left == 0
-               else f"재편안은 매치업마다 최대 {a.acq.limit}명씩 나눴어요.")
-        sub += " ESPN은 미국 동부시간 기준이라, 한국시간으로는 월요일 오후에 초기화돼요."
+        sub = (f"다 썼어요. 재편안은 다음 매치업({n0.month}/{n0.day} {'월화수목금토일'[n0.weekday()]})부터예요. " if a.left == 0 and n0
+               else "다 썼어요. 재편안은 다음 매치업부터예요. " if a.left == 0 else "")
+        sub += (f"다음 매치업({n0.month}/{n0.day} 월)이 시작되는 한국시간 월요일 오후에 다시 {a.acq.limit}회가 돼요." if n0
+                else "한국시간 월요일 오후에 초기화돼요.")
         if a.acq.used > a.acq.limit:
             sub += " ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요."
         quota = (f'<div class="quota{" zero" if a.left == 0 else ""}"><p class=q-main>이번 매치업 영입 <b>{a.left}회 남음</b> '
@@ -830,43 +841,89 @@ def render(league_name, standings, me, box, opp, a):
     note += "웨이버 결과가 나온 뒤 리포트를 다시 실행하면 가장 정확해요."
 
     # 이번 매치업 빈자리 채우기: 선발 자리가 비는 날에 경기가 있는 FA를 그날 데려온다(날짜는 미국 기준)
+    def kst(sp):  # 그날 첫 NBA 경기 시작(한국 시간) = 로스터 잠금 = 영입 마감
+        t = getattr(a.acq, "first", {}).get(sp)
+        return f"한국 {t.month}/{t.day}({'월화수목금토일'[t.weekday()]}) {t.hour}:{t.minute:02d}" if t else ""
+
     def day(sp):
         d = n0 - timedelta(days=a.week_end + 1 - sp) if n0 else None
-        t = getattr(a.acq, "first", {}).get(sp)  # 그날 첫 NBA 경기 시작(한국 시간) = 로스터 잠금
-        lock = f"<small>한국 {t.day}일 {t.hour}:{t.minute:02d}까지</small>" if t else ""
-        return (f"{d.month}/{d.day} {'월화수목금토일'[d.weekday()]}" if d else ("오늘" if sp == a.today_sp else f"{sp - a.today_sp}일 뒤")) + lock
+        return ((f"{d.month}/{d.day} {'월화수목금토일'[d.weekday()]}" if d else ("오늘" if sp == a.today_sp else f"{sp - a.today_sp}일 뒤"))
+                + (f"<small>{kst(sp)}까지 영입</small>" if kst(sp) else ""))
     card = lambda l, p, c: f"<div class={c}><small>{l}</small><b>{e(p.name)}</b><small>{poss(p)} {e(p.proTeam)} {status(p)}</small></div>"
     st = a.stream
     if st.moves:
         first = f"아래 재편안의 이번 주 영입 {st.now}번을 먼저 하고, " if st.now else ""
-        stream = (f"<p class=lead>{first}남는 영입 {len(st.moves)}번으로 선발 자리가 비는 날을 채우면 이번 매치업 남은 예상 점수가 "
+        stream = (f"<h2>이번 매치업 빈자리 채우기</h2><p class=lead>{first}남는 영입 {len(st.moves)}번으로 선발 자리가 비는 날을 채우면 이번 매치업 남은 예상 점수가 "
                   f"<b>{st.base:.0f}</b>점에서 <b>{st.total:.0f}</b>점으로 늘어요(+{st.total - st.base:.0f}).</p>"
-                  "<p class=note>표의 날짜는 미국 날짜예요. 이 리그는 그날 첫 NBA 경기가 시작되면 로스터가 잠겨서, 날짜 아래 시각(한국 시간) 전에 "
-                  "영입해야 그날부터 뛰어요. 늦으면 다음 날부터 뛰어요.</p><ol class=moves>"
+                  "<p class=note>날짜는 경기가 열리는 미국 날짜, 아래 시각은 한국 시간 영입 마감이에요(이 리그는 그날 첫 NBA 경기에 로스터가 잠겨서, "
+                  "늦으면 다음 날부터 뛰어요).</p><ol class=moves>"
                   + "".join(f"<li><span class=when>{day(sp)}</span><div class=pair>{card('방출', d, 'out')}<span class=arrow aria-hidden=true>→</span>"
                             f"{card('영입', f, 'in')}</div><span class=gain>+{g:.0f}<small>{n}경기 뜀</small></span></li>" for sp, d, f, n, g in st.moves)
                   + "</ol><p class=note>영입한 선수를 며칠 뒤 다시 내보내는 줄도 있어요(빈 날만 쓰고 바꾸기). 처음 내보낸 선수는 돌아오지 않고, "
                   "매치업이 끝나면 마지막에 영입한 선수가 남아요. 바로 영입할 수 있는 선수만 넣었고, 가치가 가장 낮은 "
                   f"{STREAM_SPOTS}명의 자리만 써요.</p>")
-    elif a.left == 0:
-        stream = "<p class=lead>다음 매치업에 다시 계산돼요.</p>"
-    else:
+    else:  # 할 일이 없으면 칸 자체를 숨긴다(맨 위 '지금 할 일'이 정리)
         alt = getattr(st, "alt", None)
-        stream = ("<p class=lead>아래 재편안의 이번 주 영입을 하고 나면 남는 영입이 없어요.</p>" if st.now and not (a.left is None or a.left > st.now)
-                  else "<p class=lead>이번 매치업에는 영입으로 채울 만한 빈자리가 없어요.</p>")
-        if alt and alt.moves:
-            stream = (f"<p class=lead>내보낼 만한 선수가 없어요. 가장 약한 {e(alt.moves[0][1].name)}도 바로 영입할 수 있는 FA보다 좋은 선수예요.</p>"
+        stream = ""
+        if a.left != 0 and alt and alt.moves:
+            stream = (f"<h2>이번 매치업 빈자리 채우기</h2><p class=lead>내보낼 만한 선수가 없어요. 가장 약한 {e(alt.moves[0][1].name)}도 바로 영입할 수 있는 FA보다 좋은 선수예요.</p>"
                       f"<p class=note>참고: {e(alt.moves[0][1].name)}의 자리를 이번 매치업 내내 돌려 쓰면(영입 {len(alt.moves)}번) 예상 점수는 "
                       f"+{alt.total - alt.base:.0f}점이지만, 그 선수를 잃어요.</p>")
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
     # IR 관리: 부상 선수가 있을 때만
     ir = ""
     if a.ir:
-        back = lambda p: (f"{p.expected_return_date.month}/{p.expected_return_date.day} 복귀 예정" if getattr(p, "expected_return_date", None)
-                          else "복귀일 정보 없음(1주 결장으로 계산)" if p.injuryStatus in IR_OK else "")
-        ir = (f"<h2>IR 관리</h2><p class=note>IR 칸 {a.ir_slots}개. OUT 선수는 복귀가 늦은 선수부터 IR에 둬요(벤치 자리를 오래 차지하니까).</p><ul class=extra>"
-              + "".join(f"<li><b>{act}</b> {e(p.name)} <small>{status(p)} {back(p)}</small>{' — ' + why if why else ''}</li>" for p, act, why in a.ir)
-              + "</ul>\n")
+        back = lambda p: (f"{d.month}/{d.day} 복귀 예정" if (d := getattr(p, "expected_return_date", None)) else "")
+        unknown = any(p.injuryStatus in IR_OK and not getattr(p, "expected_return_date", None) for p, _, _ in a.ir)
+        keep_ir = [p for p, act, _ in a.ir if act == "IR 유지"]
+        ir = (f"<h2>IR 관리</h2><p class=note>IR 칸 {a.ir_slots}개. OUT 선수는 복귀가 늦은 선수부터 IR에 둬요(벤치 자리를 오래 차지하니까)."
+              + (" 복귀일이 비어 있는 선수는 1주 결장으로 계산했어요." if unknown else "") + "</p><ul class=extra>"
+              + "".join(f"<li><b>{act}</b> {e(p.name)} <small>{status(p)} {back(p)}</small>{' — ' + why if why else ''}</li>"
+                        for p, act, why in a.ir if act != "IR 유지")
+              + (f"<li><b>IR 유지</b> {', '.join(e(p.name) for p in keep_ir)}</li>" if keep_ir else "") + "</ul>\n")
+
+    # 지금 할 일: 흩어진 할 일을 맨 위 한곳에(파이썬이 처음 계산한 안 기준). 같은 일은 한 번만
+    irs = {p.playerId: act for p, act, _ in a.ir}
+    todo = [f"<b>{e(p.name)}</b> IR에서 빼기 — 이걸 먼저 해야 영입이 막히지 않아요" for p, act, _ in a.ir if act == "IR에서 빼기"]
+    this_week = [(m, alt) for m, alt, w in zip(a.moves, a.alts, a.week_of) if w == 0]
+    merged = {m[1].playerId for m, _ in this_week if irs.get(m[1].playerId) == "IR에 넣기"}  # 방출 대신 IR에 넣고 영입
+    todo += [f"<b>{e(p.name)}</b> IR에 넣기 — 방출 없이 자리가 하나 생겨요" for p, act, _ in a.ir if act == "IR에 넣기" and p.playerId not in merged]
+    due = kst(a.add_sp)
+    for (f, d, g, c), alt in this_week:
+        s = (f"<b>{e(d.name)}</b> IR에 넣고 <b>{e(f.name)}</b> 영입(방출 없음)" if d.playerId in merged
+             else f"<b>{e(d.name)}</b> 방출하고 <b>{e(f.name)}</b> {'웨이버 신청' if f.waiver else '영입'}")
+        s += f" — 3주 +{g:.0f}점"
+        if f.waiver:
+            s += f". 실패하면 {e(alt[1].name)} 방출하고 {e(alt[0].name)} 영입" if alt else ". 웨이버라 결과가 나온 뒤 들어와요"
+        elif due:
+            s += f". {due} 전까지 해야 그날부터 뛰어요"
+        todo.append(s)
+    sm = a.stream.moves
+    if sm:
+        todo += [f"<b>{e(d.name)}</b> 방출하고 <b>{e(f.name)}</b> 영입 — 이번 매치업 +{g:.0f}점" + (f". {kst(sp)} 전까지" if kst(sp) else "")
+                 for sp, d, f, n, g in sm if sp == sm[0][0]]
+        if any(m[0] != sm[0][0] for m in sm):
+            todo.append("그다음 날짜의 교체는 아래 '빈자리 채우기' 표를 보세요")
+    for p in a.active:  # 선발 자리의 DTD: 경기 전에 출전 확인
+        if p.injuryStatus == "DAY_TO_DAY" and p.lineupSlot not in ("BE", "IR"):
+            nxt = min(map(int, p.schedule), default=None)
+            t = getattr(p, "tips", {}).get(nxt)
+            todo.append(f"<b>{e(p.name)}</b> DTD — " + (f"한국 {t.month}/{t.day} {t.hour}:{t.minute:02d} " if t else "")
+                        + "경기 전에 출전 여부를 확인하고, 못 뛰면 벤치 선수와 바꾸세요")
+    if a.left == 0 and a.moves and n0:
+        todo.append(f"이번 매치업 영입은 다 썼어요. 다음 매치업({n0.month}/{n0.day} 월)에 <b>{e(a.moves[0][1].name)}</b> 방출하고 "
+                    f"<b>{e(a.moves[0][0].name)}</b> 영입")
+    if a.acts:
+        todo.append("(선택) " + e(a.acts[0]))
+    if a.trades:
+        todo.append(f"(선택) 트레이드 제안 {len(a.trades)}개가 아래에 있어요. 친구가 받아야 해서 급하지 않아요")
+    wait = [f"{e(p.name)}({'IR' if act == 'IR 유지' else 'OUT, 벤치'})" for p, act, _ in a.ir if act in ("IR 유지", "벤치에서 기다리기")]
+    foot = ((f"<p class=note>그대로 둘 선수: {', '.join(wait)}</p>" if wait else "")
+            + (f"<p class=note>이번 매치업 승률 {a.win:.0%}라 뒤집기 어려워요. 영입은 앞으로 3주 점수 기준이에요.</p>"
+               if a.win is not None and a.win < .1 and not a.acts else "")
+            + ("<p class=note>아래 알약 ×로 재편안을 바꿨다면 재편안의 '할 일'을 따르세요.</p>" if this_week else ""))
+    todo_html = (f"<h2>지금 할 일</h2><ol class=todo>{''.join(f'<li>{x}</li>' for x in todo) or '<li>지금 할 일 없어요. 이대로 두면 돼요.</li>'}</ol>"
+                 + foot)
 
     # 트레이드 제안: 재편안(FA 영입)을 다 한 뒤 기준, 친구 팀과 1:1
     if a.trades:
@@ -965,27 +1022,28 @@ def render(league_name, standings, me, box, opp, a):
 <p class=date>최근 업데이트 <b>{now.month}월 {now.day}일 {now.hour:02d}:{now.minute:02d}</b> <span id=ago></span> <button type=button id=upd hidden>새 리포트 확인</button></p></header>
 <p id=updmsg class=note role=status></p>
 
-{quota}<h2>이번 매치업 빈자리 채우기</h2>{stream}
-<h2>재편안 (3주 기준)</h2><ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
+{todo_html}
+{quota}{stream}
+<h2>재편안 (3주 기준)</h2><div id=plan aria-live=polite></div><ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 알약의 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><p class=note>{note}</p>{extra}
 {ir}<h2>트레이드 제안</h2>{trade}
 <script>{script}</script>
 <script>{UPD_JS}</script>
 
-<h2>포지션 구성</h2><div class=board>{board}</div>
+<details><summary><h2>포지션 구성</h2></summary><div class=board>{board}</div>
 <p class=note>숫자는 그 포지션을 뛸 수 있는 내 선수 수예요(재편 후 바뀌면 → 표시). 여러 포지션 선수는 칸마다 나오고, 진한 이름은 주 포지션,
 +는 처음 재편안의 영입, −는 방출이에요(위에서 ×로 바꾼 재편안은 여기 반영되지 않아요). 재편안이 인원을 늘리는 포지션은 부족 → 적정,
 줄이는 포지션은 과다 → 적정, 건드리지 않는 포지션은 유지예요. 보강 효과는 그 포지션 FA 중 가장 좋은 선수를 데려왔을 때 {a.days}일 선발 점수가 오르는 양이에요.
-지금은 선발 {len(a.slots)}자리 중 하루 평균 {a.idle:.1f}자리가 비어요(그날 경기 있는 선수가 모자람). 그래서 실력이 비슷하면 경기 수 많은 선수가 유리하고, 영입 순위에 반영돼 있어요.</p>
+지금은 선발 {len(a.slots)}자리 중 하루 평균 {a.idle:.1f}자리가 비어요(그날 경기 있는 선수가 모자람). 그래서 실력이 비슷하면 경기 수 많은 선수가 유리하고, 영입 순위에 반영돼 있어요.</p></details>
 
 <h2>이번 매치업</h2>{match}
 
-<h2>내 선수</h2><ul class=rows>{roster_head}{roster}</ul>
+<details><summary><h2>내 선수</h2></summary><ul class=rows>{roster_head}{roster}</ul></details>
 
-<h2>영입 후보</h2>{fas}
+<details><summary><h2>영입 후보</h2></summary>{fas}</details>
 
-<h2>리그 순위</h2><ul class="rows std">{std}</ul>
+<details><summary><h2>리그 순위</h2></summary><ul class="rows std">{std}</ul></details>
 
-<h2>계산 방법</h2><ul class=method>
+<details><summary><h2>계산 방법</h2></summary><ul class=method>
 <li>경기당 추정: 올 시즌 평균을 작년 평균과 ESPN 예상 쪽으로 보정해요. 올 시즌 {K}경기를 뛰면 반반이라, 시즌 초 몇 경기로 튀는 숫자를 줄여 줘요. 다만 5경기 넘게 뛰었는데 작년과 차이가 우연으로 보기 힘들 만큼 크면(역할이 바뀐 선수) 작년 기록을 거의 안 믿어요.</li>
 <li>출전율: ESPN 예상 출전 경기 ÷ 82(정규시즌 경기 수)에서 빠지는 비율의 절반만 반영해요(예: 66경기 예상이면 90%). 지금 뛰는 선수가 앞으로 3주 안에 빠질 가능성은 시즌 전체보다 낮아서예요. ESPN 예상이 없으면 작년 출전 경기로 계산해요.</li>
 <li>선발 점수: 날마다 실제 NBA 일정에서 경기가 있는 선수를 선발 {len(a.slots)}자리에 가장 높게 배치한 합이에요. OUT 선수는 복귀 예정일까지 0점.</li>
@@ -995,7 +1053,7 @@ def render(league_name, standings, me, box, opp, a):
 <li>빈자리 채우기: 재편안의 이번 주 교체를 먼저 한 로스터에서, 가치가 가장 낮은 {STREAM_SPOTS}명의 자리를 선발 자리가 비는 날에 경기가 있는 FA로 바꿔 가며 이번 매치업 선발 점수를 가장 많이 올리는 순서를 골라요. 남는 영입 횟수만 써요. 한 번에 하나씩 고르는 방식이라 완벽한 최적은 아니에요.</li>
 <li>트레이드 제안: 재편안의 FA 영입을 다 한 로스터에서, 내 선수 1명과 친구 팀 선수 1명을 바꿨을 때 두 선수 가치 차이가 {TRADE_FAIR:.0%} 이내(친구가 받아 줄 만한 수준)이고 내 선발 점수가 {MIN_GAIN}점 넘게 오르는 안을, 내 점수가 많이 오르는 순으로 보여 줘요. 친구가 실제로 받을지는 몰라요.</li>
 <li>승률: 현재 점수 + 남은 예상과, 남은 선발 경기의 흔들림으로 계산해요. 80% 범위는 예상 최종이 열 번 중 여덟 번 들어가는 구간이에요.</li>
-</ul></main></body></html>"""
+</ul></details></main></body></html>"""
 
 
 def login_cookies(league_id, force=False):

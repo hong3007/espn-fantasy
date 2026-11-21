@@ -125,7 +125,13 @@ mk_lk = lambda locked: report.analyze(roster, [], [c2, bad], slots, {}, 1, 1, 6,
 alk, aun = mk_lk(True), mk_lk(False)
 assert (alk.sps.start, aun.sps.start) == (2, 1) and alk.stream.base < aun.stream.base, "잠겼으면 재편안·빈자리 채우기 모두 내일(2일)부터"
 alk.stream = NS(moves=[(2, w, c2, 5, 30.0)], base=0.0, total=30.0, now=0, spots=1)
-assert "<small>한국 4일 9:30까지</small>" in report.render("우리리그", [me_t, other], me_t, None, None, alk)
+# 지금 할 일: OUT인데 IR 자리가 없어 재편안이 방출하라는 선수는 체크리스트에 한 번만(IR '방출'과 재편안 교체는 같은 일)
+olow = P("OutLow", 5, ["PG", "G"], sps, injury="OUT", back=99)
+ptd = report.render("우리리그", [me_t, other], me_t, None, None, report.analyze(roster + [olow], [], [c2], slots, {}, 0, 1, 3, 6))
+todo_part = ptd[ptd.index("<h2>지금 할 일</h2>"):ptd.index("</ol>", ptd.index("<h2>지금 할 일</h2>"))]
+assert todo_part.count("OutLow") == 1 and "OutLow</b> 방출하고 <b>C2</b> 영입" in todo_part, todo_part
+plk = report.render("우리리그", [me_t, other], me_t, None, None, alk)
+assert "<small>한국 11/4(수) 9:30까지 영입</small>" in plk and "W</b> 방출하고 <b>C2</b> 영입 — 이번 매치업 +30점. 한국 11/4(수) 9:30 전까지" in plk, "마감 시각: 표와 맨 위 할 일"
 # 처음 내보낸 선수보다 장기 가치가 낮은 FA로는 바꾸지 않는다: Low(15)는 C1(20) 자리엔 못 들어가고 W(10) 자리에만
 low15 = P("Low", 15, ["C", "PG", "G"], [2, 3, 4, 5, 6])
 s3 = report.stream_plan(roster, roster, [P("Strong", 30, ["C"], [1]), low15], sps, slots, 1, {}, 6)
@@ -234,7 +240,9 @@ box = NS(home_team=other, away_team=me_t, home_score=111.0, away_score=99.0)
 page = report.render("우리리그", [me_t, other], me_t, box, other, a2)
 assert "<p class=final>209</p>" in page and "<p class=final>411</p>" in page, "현재 점수 + 남은 예상"
 assert "방출 → C2" in page and "id=pills" in page and "내 승률" in page and "80% 범위" in page
-assert "이번 매치업 빈자리 채우기</h2>" in page and page.index("이번 매치업 빈자리 채우기</h2>") < page.index("id=pills")
+assert "<h2>지금 할 일</h2>" in page and page.index("<h2>지금 할 일</h2>") < page.index("class=\"quota") < page.index("id=plan") < page.index("id=pills")
+assert "<details><summary><h2>계산 방법</h2></summary>" in page and page.count("<details>") == page.count("</details>") == 5, "참고 섹션은 접기"
+assert ("이번 매치업 빈자리 채우기</h2>" in page) == bool(a.stream.moves or getattr(a.stream, "alt", None) and a.stream.alt.moves), "할 일 없으면 칸 숨김"
 assert page.count("<script>") == page.count("</script>") == 2, "데이터 안의 </ 가 스크립트를 끊으면 안 됨"
 assert re.search(r'name=generated content="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"', page) and "id=upd" in page and "id=updmsg" in page, "새 리포트 확인 버튼"
 bye = report.render("우리리그", [me_t, other], me_t, None, None, a)
