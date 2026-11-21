@@ -129,9 +129,9 @@ alk.stream = NS(moves=[(2, w, c2, 5, 30.0)], base=0.0, total=30.0, now=0, spots=
 olow = P("OutLow", 5, ["PG", "G"], sps, injury="OUT", back=99)
 ptd = report.render("우리리그", [me_t, other], me_t, None, None, report.analyze(roster + [olow], [], [c2], slots, {}, 0, 1, 3, 6))
 todo_part = ptd[ptd.index("<h2>지금 할 일</h2>"):ptd.index("</ol>", ptd.index("<h2>지금 할 일</h2>"))]
-assert todo_part.count("OutLow") == 1 and "OutLow</b> 방출하고 <b>C2</b> 영입" in todo_part, todo_part
+assert todo_part.count("OutLow") == 1 and "OutLow</b> 방출 → <b>C2</b> 영입" in todo_part, todo_part
 plk = report.render("우리리그", [me_t, other], me_t, None, None, alk)
-assert "<small>한국 11/4(수) 9:30까지 영입</small>" in plk and "W</b> 방출하고 <b>C2</b> 영입 — 이번 매치업 +30점. 한국 11/4(수) 9:30 전까지" in plk, "마감 시각: 표와 맨 위 할 일"
+assert "<small>한국 11/4(수) 9:30까지 영입</small>" in plk and "W</b> 방출 → <b>C2</b> 영입 (이번 매치업 +30점) · 마감 한국 11/4(수) 9:30" in plk, "마감 시각: 표와 맨 위 할 일"
 # 처음 내보낸 선수보다 장기 가치가 낮은 FA로는 바꾸지 않는다: Low(15)는 C1(20) 자리엔 못 들어가고 W(10) 자리에만
 low15 = P("Low", 15, ["C", "PG", "G"], [2, 3, 4, 5, 6])
 s3 = report.stream_plan(roster, roster, [P("Strong", 30, ["C"], [1]), low15], sps, slots, 1, {}, 6)
@@ -172,7 +172,7 @@ t2 = "\n".join(a2.acts)
 assert (a2.me_w.total, a2.opp_w.total) == (110, 300)
 # 예상 최종 260 대 300 → 40점 차라 승률 낮음. C3↔W(바로 영입)는 1~3일 +2+22+22=46점이라 승률이 크게 오름
 assert .1 < a2.win < .3, a2.win
-assert a2.moves[0][0] is c2w and re.search(r"승률 \d+% → \d+%: C3 영입", t2) and ("IRback", "IR에서 빼기") in [(p.name, act) for p, act, _ in a2.ir], t2
+assert a2.moves[0][0] is c2w and re.search(r"승률 \d+% → \d+%: \w+ 방출 → C3 영입", t2) and ("IRback", "IR에서 빼기") in [(p.name, act) for p, act, _ in a2.ir], t2
 # 웨이버 순위 6번째면 영입 확률 0.75^5 ≈ 24%. 실패해도 영입 횟수는 안 줄어 순위는 순증가 그대로, 대신 실패 시 대안을 붙인다
 assert report.claim_p(c2w, 1) == 1 and report.claim_p(c3, 6) == 1 and round(report.claim_p(c2w, 6), 3) == .237 and report.claim_p(c2w, 0) == 1
 # 웨이버 C9(+520)가 1순위 + 대안 C3(바로 영입). 웨이버를 따내면 순위가 맨 뒤로 가니 다음 웨이버 PGw(+180)는 재편안에 넣지 않는다
