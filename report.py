@@ -374,6 +374,32 @@ def trade_ideas(mine, my_roster, others, sps, slots, today_sp, limits, n=TRADES,
     return out[:n]
 
 
+IR_OK = ("OUT", "SUSPENSION")  # IR 칸에 둘 수 있는 상태(예전 안내와 같은 기준)
+
+
+def ir_plan(roster, ir_slots, drops=()):
+    """IR 칸 관리 [(선수, 할 일, 이유)], 할 일 있는 줄 먼저.
+    IR에는 오래 빠질(복귀 늦은) OUT 선수부터 둔다(벤치 자리를 오래 차지하니까). 복귀일이 같으면 지금 IR에 있는 선수를 그대로(괜히 바꾸지 않게).
+    IR 자리가 모자라 벤치에 남는 OUT 선수는 재편안이 방출하라고 했으면(drops) 방출, 아니면 기다리기."""
+    hurt = sorted((p for p in roster if p.injuryStatus in IR_OK), key=lambda p: (-p.back_sp, p.lineupSlot != "IR"))
+    want = {p.playerId for p in hurt[:ir_slots]}
+    rows = []
+    for p in roster:
+        if p.lineupSlot == "IR" and p.injuryStatus not in IR_OK:
+            rows.append((p, "IR에서 빼기", "복귀했어요. 로스터로 올려야 영입이 막히지 않아요(로스터가 꽉 찼으면 1명 방출)."))
+        elif p.lineupSlot == "IR" and p.playerId not in want:
+            rows.append((p, "IR에서 빼기", "더 오래 빠질 선수에게 IR 자리를 넘겨요."))
+        elif p.lineupSlot == "IR":
+            rows.append((p, "IR 유지", ""))
+        elif p.playerId in want:
+            rows.append((p, "IR에 넣기", "벤치 자리가 하나 비어서 방출 없이 1명을 더 영입할 수 있어요."))
+        elif p.injuryStatus in IR_OK:
+            rows.append((p, "방출", "IR 자리가 없어 벤치를 차지해요. 재편안대로 내보내고 그 자리에 FA를 데려와요.") if p.playerId in drops
+                        else (p, "벤치에서 기다리기", "IR 자리가 없어 벤치를 차지하지만, 가치가 높아 내보내기보다 기다리는 게 나아요."))
+    order = {"IR에서 빼기": 0, "IR에 넣기": 1, "방출": 2, "벤치에서 기다리기": 3, "IR 유지": 4}
+    return sorted(rows, key=lambda r: order[r[1]])
+
+
 def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end, final_sp, scores=(0, 0), acq=None, others=()):
     """scores = 이번 매치업 현재 점수 (나, 상대).
     acq = 영입 한도 NS(limit 매치업당 한도(-1이면 무제한), used 이번 매치업에 쓴 횟수, next_start 다음 매치업 시작 날짜)"""
@@ -422,13 +448,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
         sd = (spread(ZERO, me_w, active) ** 2 + spread(ZERO, opp_w, opp_active) ** 2) ** .5
         win = prob_above(diff, sd)
 
-    acts = []  # 재편안 말고 함께 챙길 것
-    ir_free = ir_slots - sum(p.lineupSlot == "IR" for p in roster)
-    for p in [p for p in active if p.injuryStatus == "OUT"][:max(0, ir_free)]:
-        acts.append(f"{p.name}: OUT 상태예요. IR로 옮기면 방출 없이 1명을 더 영입할 수 있어요.")
-    for p in roster:
-        if p.lineupSlot == "IR" and p.injuryStatus not in ("OUT", "SUSPENSION"):
-            acts.append(f"{p.name}: IR에서 복귀했어요. 로스터로 올려야 영입이 막히지 않아요(1명 방출 필요).")
+    acts = []  # 재편안 말고 함께 챙길 것(IR은 ir_plan이 따로)
     if win is not None and win < .5 and left != 0:  # 이번 매치업에 영입이 남아 있을 때만
         wk = rank_adds(active, roster, [f for f in fas if not f.waiver], week, slots, today_sp, limits, min_gain=0)[:1]
         if wk and (not moves or wk[0][0] is not moves[0][0]):
@@ -441,6 +461,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
               win=win, me_sd=spread(ZERO, me_w, active), opp_sd=spread(ZERO, opp_w, opp_active) if opp_w else 0,
               active=active, acq=acq, left=left, week_of=week_of, alts=alts, wrank=wrank, stream=stream, week_end=week_end,
+              ir=ir_plan(roster, ir_slots, drops={m[1].playerId for m in moves}), ir_slots=ir_slots,
               trades=trade_ideas(after, [p for p in roster if p.lineupSlot == "IR"] + after, others, sps, slots, today_sp, limits,
                                  keep={m[0].playerId for m in moves} | {m[1].playerId for m in stream.moves}))
 
@@ -838,6 +859,15 @@ def render(league_name, standings, me, box, opp, a):
                       f"<p class=note>참고: {e(alt.moves[0][1].name)}의 자리를 이번 매치업 내내 돌려 쓰면(영입 {len(alt.moves)}번) 예상 점수는 "
                       f"+{alt.total - alt.base:.0f}점이지만, 그 선수를 잃어요.</p>")
     extra = f"<ul class=extra>{''.join(f'<li>{e(x)}</li>' for x in a.acts)}</ul>" if a.acts else ""
+    # IR 관리: 부상 선수가 있을 때만
+    ir = ""
+    if a.ir:
+        back = lambda p: (f"{p.expected_return_date.month}/{p.expected_return_date.day} 복귀 예정" if getattr(p, "expected_return_date", None)
+                          else "복귀일 정보 없음(1주 결장으로 계산)" if p.injuryStatus in IR_OK else "")
+        ir = (f"<h2>IR 관리</h2><p class=note>IR 칸 {a.ir_slots}개. OUT 선수는 복귀가 늦은 선수부터 IR에 둬요(벤치 자리를 오래 차지하니까).</p><ul class=extra>"
+              + "".join(f"<li><b>{act}</b> {e(p.name)} <small>{status(p)} {back(p)}</small>{' — ' + why if why else ''}</li>" for p, act, why in a.ir)
+              + "</ul>\n")
+
     # 트레이드 제안: 재편안(FA 영입)을 다 한 뒤 기준, 친구 팀과 1:1
     if a.trades:
         vs = opp.team_name if opp else None  # 이번 매치업 상대 팀이면 표시
@@ -937,7 +967,7 @@ def render(league_name, standings, me, box, opp, a):
 
 {quota}<h2>이번 매치업 빈자리 채우기</h2>{stream}
 <h2>재편안 (3주 기준)</h2><ul id=pills class=pills></ul><p class=note>알약은 데려올 선수 순서예요. 다른 팀이 먼저 데려간 선수는 ×를 누르면 빼고 다시 계산해요(새로고침하면 처음으로).</p><p id=excluded class=note></p><div id=plan aria-live=polite></div><p class=note>{note}</p>{extra}
-<h2>트레이드 제안</h2>{trade}
+{ir}<h2>트레이드 제안</h2>{trade}
 <script>{script}</script>
 <script>{UPD_JS}</script>
 

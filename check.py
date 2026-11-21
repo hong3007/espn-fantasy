@@ -90,7 +90,15 @@ assert all(t[0] is not hurt for t in a.adds), "결장 FA는 추천하지 않음"
 # 포지션: PG는 W 방출로 3→2명, C는 C1 방출·C2·Hurt 영입으로 1→2명. 보강 효과는 그 포지션 최선 FA(C2 +130), PG는 없음
 assert [(r.x, len(r.before), len(r.after), r.best and r.best[0].name) for r in a.pos] == [("PG", 3, 2, None), ("C", 1, 2, "C2")]
 assert round(a.idle, 2) == round((2 * 6 - 7) / 6, 2), "선발 2자리×6일 중 7번만 채움(G1 6 + C1 1)"
-assert any(x.startswith("Out: OUT 상태예요") for x in a.acts), a.acts
+assert [(p.name, act) for p, act, _ in a.ir] == [("Out", "IR에 넣기")], a.ir
+# IR 관리: IR 칸 2개, OUT 4명(IR에 A·B, 벤치에 C·D). 복귀가 늦은 C(10일)가 IR로, 가장 빠른 B(3일)는 IR에서 빼기. 재편안 방출 대상 D는 방출
+ir_a, ir_b = P("A", 40, ["PG"], [], slot="IR", injury="OUT", back=8), P("B", 30, ["PG"], [], slot="IR", injury="OUT", back=3)
+ir_c, ir_d = P("C", 35, ["PG"], [], injury="OUT", back=10), P("D", 20, ["PG"], [], injury="OUT", back=5)
+plan_ir = {p.name: act for p, act, _ in report.ir_plan([g1, ir_a, ir_b, ir_c, ir_d], 2, drops={"D"})}
+assert plan_ir == {"A": "IR 유지", "B": "IR에서 빼기", "C": "IR에 넣기", "D": "방출"}, plan_ir
+ir_d3 = P("D3", 20, ["PG"], [], injury="OUT", back=3)  # B와 같은 날 복귀
+assert {p.name: act for p, act, _ in report.ir_plan([ir_a, ir_b, ir_d3], 2)} == {"A": "IR 유지", "B": "IR 유지", "D3": "벤치에서 기다리기"}, "복귀일이 같으면 지금 IR 그대로, 남은 OUT은 기다리기"
+assert [act for p, act, _ in report.ir_plan([P("Back", 30, ["PG"], [], slot="IR")], 2)] == ["IR에서 빼기"], "복귀했는데 IR에 있으면 빼기"
 
 # 이번 주 빈자리 채우기: C1은 1일만 경기라 C가 2~6일 빈다. 영입 1번이면 C1 자리에 C2를 1일에(1일 20→25, 2~6일 +25씩 = +130. W 자리면 +125)
 s1 = report.stream_plan(roster, roster, [c2, bad], sps, slots, 1, {}, 1)
@@ -146,7 +154,7 @@ assert report.trade_ideas(roster, roster, [("친구팀", [oc1, oc2])], sps, slot
 assert all(y.position != "C" or x.position == "C" for _, x, y, _ in report.trade_ideas(roster, roster, [("친구팀", [oc1, oc2])], sps, slots, 1, {"C": 1})), "C 제한 1이면 C를 하나 더 받지 않음"
 at = report.analyze(roster, [], [], slots, {}, 1, 1, 3, 6, others=[("<b>친구</b>", [oc1, oc2])])
 pt = report.render("우리리그", [me_t, other], me_t, None, None, at)
-assert "<h2>트레이드 제안</h2>" in pt and "&lt;b&gt;친구" in pt and "일 선발 점수</small>" in pt and pt.index("id=pills") < pt.index("<h2>트레이드 제안</h2>")
+assert "<h2>IR 관리</h2>" not in pt and "<h2>트레이드 제안</h2>" in pt and "&lt;b&gt;친구" in pt and "일 선발 점수</small>" in pt and pt.index("id=pills") < pt.index("<h2>트레이드 제안</h2>")
 
 # 상대가 있고 지는 중: 이번 매치업용 추천은 웨이버 제외, IR 복귀 안내
 ir = P("IRback", 25, ["PG"], sps, slot="IR")
@@ -158,7 +166,7 @@ t2 = "\n".join(a2.acts)
 assert (a2.me_w.total, a2.opp_w.total) == (110, 300)
 # 예상 최종 260 대 300 → 40점 차라 승률 낮음. C3↔W(바로 영입)는 1~3일 +2+22+22=46점이라 승률이 크게 오름
 assert .1 < a2.win < .3, a2.win
-assert a2.moves[0][0] is c2w and re.search(r"승률 \d+% → \d+%: C3 영입", t2) and "IRback: IR에서 복귀" in t2, t2
+assert a2.moves[0][0] is c2w and re.search(r"승률 \d+% → \d+%: C3 영입", t2) and ("IRback", "IR에서 빼기") in [(p.name, act) for p, act, _ in a2.ir], t2
 # 웨이버 순위 6번째면 영입 확률 0.75^5 ≈ 24%. 실패해도 영입 횟수는 안 줄어 순위는 순증가 그대로, 대신 실패 시 대안을 붙인다
 assert report.claim_p(c2w, 1) == 1 and report.claim_p(c3, 6) == 1 and round(report.claim_p(c2w, 6), 3) == .237 and report.claim_p(c2w, 0) == 1
 # 웨이버 C9(+520)가 1순위 + 대안 C3(바로 영입). 웨이버를 따내면 순위가 맨 뒤로 가니 다음 웨이버 PGw(+180)는 재편안에 넣지 않는다
