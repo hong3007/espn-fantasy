@@ -9,7 +9,7 @@
 """
 import base64, html, json, os, struct, webbrowser, zlib
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from statistics import NormalDist, fmean, median, stdev
@@ -27,7 +27,7 @@ MIN_GAIN = 15  # 이 점수(WINDOW일 선발 점수)보다 적게 오르는 교�
 MIN_CONF = .7  # 확실도(순증가가 0보다 클 확률)가 이보다 낮은 근소한 교체도 추천하지 않는다(사용자 요청 2026-11-11)
 WAIVER_Q = .25  # ponytail: 웨이버 순위가 나보다 앞선 팀마다 같은 선수를 신청할 확률(가정값). 실제 신청 기록으로 보정하려면 여기를 고칠 것
 CV_M = 10    # 선수 개인의 경기 변동계수를 리그 공통값 쪽으로 당기는 강도(경기 수)
-ACQ_LIMIT = 6  # 매치업(주)당 영입 한도. ESPN API에는 이 값이 없어(설정의 1은 다른 뜻) 사용자 확인값을 쓴다(2026-11-08)
+ACQ_LIMIT = 7  # 매치업(주)당 영입 한도. ESPN API에는 이 값이 없어(설정의 1은 다른 뜻) 사용자 확인값을 쓴다(2026-11-21 리그 설정 7 확인, 전엔 6으로 잘못 앎)
 STREAM_SPOTS = 2  # 이번 주 빈자리 채우기에 쓸 자리 수: 장기 가치가 가장 낮은 선수 2명의 자리만 돌려 쓴다
 MIN_STREAM = 8    # 이번 주 선발 점수가 이보다 적게 오르는 영입은 하지 않는다(안 쓴 영입 횟수는 어차피 주말에 사라져 기준이 낮다)
 TRADES = 3        # 트레이드 제안 수(영입 다음 순위의 참고 안)
@@ -145,8 +145,11 @@ def prepare(p, raw, year, today_sp, today):
     p.tips = {int(k): g["date"] for k, g in p.schedule.items() if g.get("date")}  # 날짜별 경기 시작 시각(로스터 잠금 계산용, 빼기 전)
     p.schedule = {k: g for k, g in p.schedule.items() if not g.get("date") or g["date"] > now}
     p.back_sp = 0
+    # 로스터 자료에는 복귀 예정일이 없고 선수 카드(raw)의 injuryDetails에만 있다(2026-11-24 확인: 전원 1주로 계산되던 버그)
+    ret = (raw.get("player") or {}).get("injuryDetails", {}).get("expectedReturnDate")
+    back = p.expected_return_date or (date(*ret) if ret else None)
     if p.injuryStatus in ("OUT", "SUSPENSION"):  # 복귀일을 모르면 1주 결장으로 가정
-        p.back_sp = today_sp + (max(1, (p.expected_return_date - today).days) if p.expected_return_date else 7)
+        p.back_sp = today_sp + (max(1, (back - today).days) if back else 7)
     p.cv, p.cv_n = game_cv(raw)
     return p
 
@@ -1167,7 +1170,7 @@ def main():
     scores = ((box.home_score, box.away_score) if box.home_team is me else (box.away_score, box.home_score)) if opp else (0, 0)
     mine = next(t for t in st_all["teams"] if t["id"] == me.team_id)
     used = mine.get("transactionCounter", {}).get("matchupAcquisitionTotals", {}).get(str(league.currentMatchupPeriod), 0)
-    # 한도: ACQ_LIMIT(6). 바뀌면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수)으로 덮어쓴다
+    # 한도: ACQ_LIMIT(7). 바뀌면 환경변수 ACQ_LIMIT(.env·GitHub 저장소 변수)으로 덮어쓴다
     first = {}  # 날짜별 그날 첫 NBA 경기 시작 시각(내 팀·상대·FA 일정으로 사실상 전 구단)
     for p in rostered + fas:
         for sp, t in p.tips.items():

@@ -38,6 +38,8 @@ T = date(2026, 10, 29)
 R = lambda inj, ret, sched=None: NS(stats={}, avg_points=0, projected_avg_points=0, injuryStatus=inj,
                                     expected_return_date=ret, schedule=sched or {})
 assert [report.prepare(R("OUT", r), {}, 2027, 10, T).back_sp for r in (date(2026, 11, 3), None, date(2026, 10, 1))] == [15, 17, 11]
+# 로스터 선수는 복귀일이 선수 카드의 injuryDetails에만 있다(없으면 1주로 잘못 계산하던 버그)
+assert report.prepare(R("OUT", None), {"player": {"injuryDetails": {"expectedReturnDate": [2026, 11, 29]}}}, 2027, 10, T).back_sp == 10 + (date(2026, 11, 29) - T).days
 assert report.prepare(R("ACTIVE", None), raw, 2027, 10, T).dur == 1 - (32 / 82) / 2
 assert report.prepare(R([], None), {}, 2027, 10, T).injuryStatus is None
 sched = {"9": {"date": datetime(2000, 1, 1)}, "10": {"date": datetime(2999, 1, 1)}, "11": {}}
@@ -264,9 +266,9 @@ assert 'class="quota zero"' in px and "<b>0회 남음</b>" in px and "다음 매
 assert px.index("class=\"quota zero\"") < px.index("id=pills"), "한도 안내는 재편안(알약) 위에"
 assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매치업(11/2)부터 " in px, "주별 날짜 표기"
 assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
-# 매치업당 6회: 4회 썼으면 '2회 남음'
+# 매치업당 7회: 4회 썼으면 '3회 남음'
 p6 = report.render("우리리그", [me_t, other], me_t, None, None, mk(report.ACQ_LIMIT, 4))
-assert "영입 <b>2회 남음</b>" in p6 and "(4회 사용 / 한도 6회)" in p6
+assert "영입 <b>3회 남음</b>" in p6 and "(4회 사용 / 한도 7회)" in p6
 assert report.icon_png()[:8] == b"\x89PNG\r\n\x1a\n"
 
 # 앱 설치(PWA): 페이지가 manifest를 가리키고, manifest의 아이콘(192·512)·서비스워커 파일이 함께 만들어지는지
