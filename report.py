@@ -411,11 +411,9 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     # 이 리그는 로스터가 그날 첫 NBA 경기에 잠긴다(rosterLocktimeType FIRSTGAME_SCORINGPERIOD, 2026-11-18 확인).
     # 첫 경기가 이미 시작했으면 지금 영입해도 내일부터 뛰므로 영입 계산은 내일부터
     add_sp = today_sp + bool(getattr(acq, "locked", False))
-    start = add_sp if left != 0 else week_end + 1  # 이번 매치업 영입을 다 썼으면 재편안은 다음 매치업부터 계산
-    if start > final_sp:
-        start = today_sp
-    # 몇 번째 교체를 몇 주 뒤에 하는지: 이번 매치업 남은 횟수만큼은 이번 주, 이후는 매치업마다 한도만큼
-    week_of = [0 if left is None or i < left else 1 + (i - left) // acq.limit for i in range(MOVES)]
+    start = add_sp if add_sp <= final_sp else today_sp
+    # 재편안은 이번 매치업 남은 영입 횟수만큼만(사용자 2026-11-24: 매주 확인하니 다음 주·그다음 주 추천은 필요 없음)
+    week_of = [0] * (MOVES if left is None else min(MOVES, left))
     fas = [f for f in fas if f.injuryStatus not in ("OUT", "SUSPENSION")]  # 영입 한도가 귀해서 지금 못 뛰는 FA는 추천하지 않는다
     active = [p for p in roster if p.lineupSlot != "IR"]
     sps = range(start, min(start + WINDOW, final_sp + 1))
@@ -423,7 +421,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
     base = simulate(active, sps, slots, today_sp)
     wrank = getattr(acq, "wrank", 1)  # 내 웨이버 순위(1이 가장 먼저)
     adds = rank_adds(active, roster, fas, sps, slots, today_sp, limits)
-    moves, after, alts = plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, wrank=wrank)
+    moves, after, alts = plan_moves(active, roster, fas, sps, slots, today_sp, limits, adds, n=len(week_of), wrank=wrank)
     # 포지션: 재편안이 인원을 늘리면 부족, 줄이면 과다였던 것. 보강 효과 = 그 포지션 FA 최선 영입의 순증가
     pos = [NS(x=x, before=[p for p in active if x in p.eligibleSlots], after=[p for p in after if x in p.eligibleSlots],
               best=next((t for t in adds if x in t[0].eligibleSlots), None)) for x in BASE if x in slots]
@@ -458,7 +456,7 @@ def analyze(roster, opp_roster, fas, slots, limits, ir_slots, today_sp, week_end
             new = prob_above(diff + wk[0][2], sd)
             if new - win >= .1:  # 승률이 10%p 이상 오를 때만 1순위를 미루라고 권한다
                 acts.append(f"이번 매치업 승률 {win:.0%} → {new:.0%}: {wk[0][1].name} 방출 → {wk[0][0].name} 영입(+{wk[0][2]:.0f}점)"
-                            + (". 대신 재편안 1번은 다음 주로" if left is not None and left <= len(now) else ""))  # 실제로 밀릴 때만
+                            + (". 대신 재편안 1번은 건너뛰기" if left is not None and left <= len(now) else ""))  # 영입 횟수가 모자랄 때만
     return NS(slots=slots, days=len(sps), sps=sps, base=base, new=simulate(after, sps, slots, today_sp),
               moves=moves, adds=adds, pos=pos, idle=idle, acts=acts, me_w=me_w, opp_w=opp_w,
               roster=roster, cands=sorted(fas, key=ros, reverse=True)[:40], today_sp=today_sp, limits=limits,
@@ -477,7 +475,7 @@ def plan_data(a, info=lambda p: ""):
                       "elig": [s for s in dict.fromkeys(p.eligibleSlots) if s in a.slots], "ros": ros(p), "sd": p.sd, "se": p.se,
                       "p": claim_p(p, a.wrank), "w": bool(p.waiver),
                       "val": [game_value(p, sp, a.today_sp) for sp in a.sps]}
-    return {"slots": list(a.slots), "days": len(a.sps), "n": MOVES, "min": MIN_GAIN, "minc": MIN_CONF, "wr": a.wrank, "limits": a.limits, "my": [pack(p) for p in a.active],
+    return {"slots": list(a.slots), "days": len(a.sps), "n": len(a.week_of),"min": MIN_GAIN, "minc": MIN_CONF, "wr": a.wrank, "limits": a.limits, "my": [pack(p) for p in a.active],
             "ir": [{"id": str(p.playerId), "pos": p.position} for p in a.roster if p.lineupSlot == "IR"],
             "fa": [pack(p) for p in a.cands]}
 
@@ -589,9 +587,9 @@ if (typeof document !== "undefined") {
     $("#pills").innerHTML = M.map((m, i) => `<li class=pill><span>${i + 1}</span>${m.fa.n}` +
       `<button type=button data-id="${m.fa.id}" aria-label="${m.fa.n} 빼기">×</button></li>`).join("");
     $("#excluded").innerHTML = ex.size ? "뺀 선수: " + D.fa.filter(f => ex.has(f.id)).map(f => f.n).join(", ") : "";
-    $("#plan").innerHTML = !M.length ? (ex.size ? "<p class=lead>남은 후보 없음. 새로고침하면 원래대로.</p>" : "<p class=lead>바꿀 만한 FA가 없어요. 그대로 두세요.</p>") :
+    $("#plan").innerHTML = !M.length ? (!D.n ? "<p class=lead>이번 주 영입을 다 썼어요.</p>" : ex.size ?"<p class=lead>남은 후보 없음. 새로고침하면 원래대로.</p>" : "<p class=lead>바꿀 만한 FA가 없어요. 그대로 두세요.</p>") :
       `<p class=now>${D.now}: <b>${M[0].d.n}</b> 방출 → <b class=hl>${M[0].fa.n}</b> ${M[0].fa.w ? "웨이버 신청" : "영입"}${D.due || ""}</p>` +
-      `<p class=lead>${D.from}${D.days}일 선발 점수 <b>${P.base.toFixed(0)}</b> → <b>${P.after.toFixed(0)}</b>점${M.some(m => m.fa.w) ? "(웨이버 성공 시)" : ""}</p>` +
+      `<p class=lead>${D.days}일 선발 점수 <b>${P.base.toFixed(0)}</b> → <b>${P.after.toFixed(0)}</b>점${M.some(m => m.fa.w) ? "(웨이버 성공 시)" : ""}</p>` +
       "<ol class=moves>" + M.map((m, i) => `<li><span class=when>${D.when[i]}</span><div class=pair>${card("방출", m.d, "out")}` +
         `<span class=arrow>→</span>${card("영입", m.fa, "in")}</div><span class=gain>+${m.g.toFixed(0)}` +
         `<small>확실 ${Math.round(m.c * 100)}%</small></span>${wv(m)}</li>`).join("") + "</ol>";
@@ -813,18 +811,11 @@ def render(league_name, standings, me, box, opp, a):
 
     # 재편안: 브라우저에서 PLAN_JS가 그린다(알약 × → 그 선수를 빼고 다시 계산)
     data = plan_data(a, info=lambda p: f"{poss(p)} {e(p.proTeam)} {status(p)}")
-    names = ["이번 주", "다음 주", "그다음 주"] + [f"{n}주 뒤" for n in range(3, 12)]
-
-    def label(w):  # w주 뒤 매치업(월요일 시작)
-        d = a.acq.next_start + timedelta(days=7 * (w - 1)) if w and a.acq.next_start else None
-        return names[w] + (f" {d.month}/{d.day}~" if d else "")
-    data["when"] = [label(w) for w in a.week_of] if a.acq.limit > 0 else [f"{i}순위" for i in range(1, 11)]
-    data["now"] = data["when"][0] if a.acq.limit > 0 else "지금"
+    data["when"] = ["이번 주"] * len(a.week_of) if a.acq.limit > 0 else [f"{i}순위" for i in range(1, 11)]
+    data["now"] = "이번 주" if a.acq.limit > 0 else "지금"
     n0 = a.acq.next_start
-    data["from"] = f"다음 매치업({n0.month}/{n0.day})부터 " if a.left == 0 and n0 else ""
     t0 = getattr(a.acq, "first", {}).get(getattr(a, "add_sp", a.today_sp))
-    data["due"] = (f" · 마감 한국 {t0.month}/{t0.day} {t0.hour}:{t0.minute:02d}"
-                   if t0 and a.week_of and a.week_of[0] == 0 and a.left != 0 else "")  # × 다시 계산 때도 같은 마감
+    data["due"] = f" · 마감 한국 {t0.month}/{t0.day} {t0.hour}:{t0.minute:02d}" if t0 else ""  # × 다시 계산 때도 같은 마감
     mv = lambda t: [str(t[0].playerId), str(t[1].playerId), t[2], t[3]]
     data["init"] = {"moves": [mv(m) + [alt and mv(alt)] for m, alt in zip(a.moves, a.alts)],  # 첫 화면은 계산 없이
                     "base": a.base.total, "after": a.new.total}
@@ -832,8 +823,7 @@ def render(league_name, standings, me, box, opp, a):
     note = ""
     quota = ""  # 영입 한도 안내: 재편안 바로 위에 크게(남은 횟수가 0이면 빨간색)
     if a.acq.limit > 0:
-        sub = (f"다 썼어요. 재편안은 다음 매치업({n0.month}/{n0.day} {'월화수목금토일'[n0.weekday()]})부터예요. " if a.left == 0 and n0
-               else "다 썼어요. 재편안은 다음 매치업부터예요. " if a.left == 0 else "")
+        sub = "다 썼어요. " if a.left == 0 else ""
         sub += (f"{n0.month}/{n0.day}(월) 오후(한국)에 {a.acq.limit}회로 초기화" if n0 else "월요일 오후(한국)에 초기화")
         if a.acq.used > a.acq.limit:
             sub += " ESPN 기록상 한도보다 많이 영입했어요. 실제 한도가 다르면 알려 주세요."
@@ -908,9 +898,6 @@ def render(league_name, standings, me, box, opp, a):
             t = getattr(p, "tips", {}).get(nxt)
             todo.append(f"<b>{e(p.name)}</b> DTD: " + (f"한국 {t.month}/{t.day} {t.hour}:{t.minute:02d} " if t else "")
                         + "경기 전 출전 확인, 못 뛰면 벤치와 교체")
-    if a.left == 0 and a.moves and n0:
-        todo.append(f"이번 매치업 영입 다 씀 → 다음 매치업({n0.month}/{n0.day} 월)에 <b>{e(a.moves[0][1].name)}</b> 방출 → "
-                    f"<b>{e(a.moves[0][0].name)}</b> 영입")
     if a.acts:
         todo.append("(선택) " + e(a.acts[0]))
     if a.trades:

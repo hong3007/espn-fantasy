@@ -253,18 +253,18 @@ assert "&lt;b&gt;내팀" in page and "<b>내팀" not in page and "<img src=x>" n
 assert "data:image/png;base64," in page and "apple-touch-icon" in page and "영입 <b>1회 남음</b>" in page and "(0회 사용 / 한도 1회)" in page
 assert "BYE" in bye and "<p class=q-main>" not in bye, "한도 없는 리그는 영입 한도 안내 없음"
 
-# 영입 한도: 남은 횟수에 맞춰 주별 배정, 다 썼으면 다음 매치업부터 계산
+# 영입 한도: 재편안은 이번 매치업 남은 횟수만큼만(다음 주 추천 없음, 사용자 2026-11-24)
 mk = lambda limit, used: report.analyze(roster + [out], [], [c2, c4, bad], slots, {}, 1, 1, 3, 6,
                                         acq=NS(limit=limit, used=used, next_start=date(2026, 11, 2)))
-assert mk(1, 0).week_of == [0, 1, 2] and mk(1, 0).sps.start == 1
+assert mk(1, 0).week_of == [0] and len(mk(1, 0).moves) <= 1 and mk(1, 0).sps.start == 1
 x = mk(1, 1)
-assert x.left == 0 and x.week_of == [1, 2, 3] and x.sps.start == 4, (x.left, x.week_of, x.sps)
-assert mk(2, 1).week_of == [0, 1, 1] and mk(-1, 0).week_of == [0, 0, 0]
+assert x.left == 0 and x.week_of == [] and x.moves == [] and x.sps.start == 1, (x.left, x.week_of, x.sps)
+assert mk(2, 1).week_of == [0] and mk(-1, 0).week_of == [0, 0, 0]
 assert mk(1, 7).left == 0, "한도보다 많이 썼어도 남은 횟수는 0"
 px = report.render("우리리그", [me_t, other], me_t, None, None, x)
-assert 'class="quota zero"' in px and "<b>0회 남음</b>" in px and "다음 매치업(11/2 월)부터예요" in px, "다 썼으면 안내"
+assert 'class="quota zero"' in px and "<b>0회 남음</b>" in px and "다 썼어요" in px, "다 썼으면 안내"
 assert px.index("class=\"quota zero\"") < px.index("id=pills"), "한도 안내는 재편안(알약) 위에"
-assert "다음 주 11/2~" in px and "그다음 주 11/9~" in px and "다음 매치업(11/2)부터 " in px, "주별 날짜 표기"
+assert "다음 주" not in px and "다음 매치업" not in px, "다음 주 추천 없음"
 assert "한도보다 많이 영입" in report.render("우리리그", [me_t, other], me_t, None, None, mk(1, 7)), "설정과 기록이 어긋날 때 알림"
 # 매치업당 7회: 4회 썼으면 '3회 남음'
 p6 = report.render("우리리그", [me_t, other], me_t, None, None, mk(report.ACQ_LIMIT, 4))
